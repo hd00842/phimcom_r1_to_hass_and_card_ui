@@ -359,9 +359,9 @@ class PhicommR1Card extends HTMLElement {
   _nhanNguon(source) {
     const normalized = String(source || "").toLowerCase();
     if (normalized.includes("zing")) return "ZING MP3";
-    if (normalized.includes("playlist")) return "PLAYLIST";
+    if (normalized.includes("playlist")) return "DANH SACH PHAT";
     if (normalized.includes("youtube")) return "YOUTUBE";
-    return normalized ? normalized.toUpperCase() : "AIBOX";
+    return normalized ? normalized.toUpperCase() : "AI BOX";
   }
 
   _chuoiKhongRongDauTien(...values) {
@@ -454,6 +454,40 @@ class PhicommR1Card extends HTMLElement {
     return buttonEnabled ? "Nút đang sẵn sàng" : "Nút đang tắt";
   }
 
+  _layNhanTrangThaiChatHienThi(value) {
+    const normalized = this._chuanHoaNhanTrangThaiChat(value);
+    const labels = {
+      ready: "Sẵn sàng",
+      online: "Trực tuyến",
+      active: "Đang hoạt động",
+      available: "Khả dụng",
+      idle: "Đang chờ",
+      standby: "Chờ kích hoạt",
+      connecting: "Đang kết nối",
+      listening: "Đang nghe",
+      thinking: "Đang xử lý",
+      speaking: "Đang phản hồi",
+      unavailable: "Không khả dụng",
+      offline: "Ngoại tuyến",
+      error: "Lỗi",
+      failed: "Thất bại",
+      disabled: "Đã tắt",
+      disconnected: "Mất kết nối",
+      unknown: "Không rõ trạng thái",
+    };
+    if (labels[normalized]) return labels[normalized];
+    return String(value || "Không rõ trạng thái");
+  }
+
+  _layNhanTrangThaiPhat(state) {
+    const normalized = String(state || "").trim().toLowerCase();
+    if (normalized === "playing") return "Đang phát";
+    if (normalized === "paused") return "Tạm dừng";
+    if (normalized === "idle" || normalized === "off" || normalized === "stopped") return "Chờ phát";
+    if (normalized === "unavailable") return "Không khả dụng";
+    return normalized ? normalized : "Không rõ";
+  }
+
   _gioiHanEqLevel(value, fallback = 0) {
     const numeric = this._epKieuSo(value, fallback);
     return Math.max(-1500, Math.min(1500, Math.round(numeric)));
@@ -493,7 +527,7 @@ class PhicommR1Card extends HTMLElement {
     }
     const eqStatus = root.getElementById("eq-status-chip");
     if (eqStatus) {
-      eqStatus.textContent = this._eqEnabled ? "EQ On" : "EQ Off";
+      eqStatus.textContent = this._eqEnabled ? "EQ bật" : "EQ tắt";
       eqStatus.classList.toggle("is-off", !this._eqEnabled);
     }
     root.querySelectorAll("[data-eq-band]").forEach((slider) => {
@@ -1518,7 +1552,7 @@ class PhicommR1Card extends HTMLElement {
     const currentState = playbackState.currentState;
     const source =
       currentState === "idle" && this._laTieuDeNghi(playback.title)
-        ? "IDLE"
+        ? "CHO PHAT"
         : this._nhanNguon(playback.source);
     const volumePercent = Math.round(this._volumeLevel * 100);
     const listSource = playback.search?.source || playback.play?.source || "youtube";
@@ -1547,7 +1581,7 @@ class PhicommR1Card extends HTMLElement {
           <div class="hero-top">
             <div>
               <h2 class="song-title">${this._maHoaHtml(playback.title)}</h2>
-              <div class="song-sub">${this._maHoaHtml(playback.artist || "Unknown artist")}</div>
+              <div class="song-sub">${this._maHoaHtml(playback.artist || "Chưa rõ nghệ sĩ")}</div>
             </div>
             <span class="pill">${this._maHoaHtml(source)}</span>
           </div>
@@ -1561,10 +1595,10 @@ class PhicommR1Card extends HTMLElement {
                 ${waveBars}
               </div>
               <div class="controls-row">
-                <button id="btn-prev" class="icon-btn" title="Previous"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
-                <button id="btn-playpause" class="icon-btn icon-btn-primary" title="Play/Pause"><ha-icon icon="mdi:play-pause"></ha-icon></button>
-                <button id="btn-stop" class="icon-btn" title="Stop"><ha-icon icon="mdi:stop"></ha-icon></button>
-                <button id="btn-next" class="icon-btn" title="Next"><ha-icon icon="mdi:skip-next"></ha-icon></button>
+                <button id="btn-prev" class="icon-btn" title="Bài trước"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+                <button id="btn-playpause" class="icon-btn icon-btn-primary" title="Phát hoặc tạm dừng"><ha-icon icon="mdi:play-pause"></ha-icon></button>
+                <button id="btn-stop" class="icon-btn" title="Dừng"><ha-icon icon="mdi:stop"></ha-icon></button>
+                <button id="btn-next" class="icon-btn" title="Bài tiếp theo"><ha-icon icon="mdi:skip-next"></ha-icon></button>
               </div>
             </div>
           </div>
@@ -1577,7 +1611,7 @@ class PhicommR1Card extends HTMLElement {
             id="playback-progress-track"
             class="progress-track"
             role="slider"
-            aria-label="Playback seek"
+            aria-label="Thanh tua phát nhạc"
             aria-valuemin="0"
             aria-valuemax="${Math.max(0, Math.round(liveDurationSeconds))}"
             aria-valuenow="${Math.max(0, Math.round(livePositionSeconds))}"
@@ -1587,7 +1621,7 @@ class PhicommR1Card extends HTMLElement {
           </div>
 
           <div class="meta-row">
-            <span class="meta">State: ${this._maHoaHtml(currentState)}</span>
+            <span class="meta">Trạng thái: ${this._maHoaHtml(this._layNhanTrangThaiPhat(currentState))}</span>
             <span class="meta">${volumePercent}%</span>
           </div>
           </div>
@@ -1602,7 +1636,7 @@ class PhicommR1Card extends HTMLElement {
 
         <div class="search-row">
           <input id="media-query" class="text-input" type="text" placeholder="Tìm bài hát..." value="${this._maHoaHtml(this._query)}" />
-          <button id="btn-search" class="icon-btn icon-btn-primary" title="Search"><ha-icon icon="mdi:magnify"></ha-icon></button>
+          <button id="btn-search" class="icon-btn icon-btn-primary" title="Tìm kiếm"><ha-icon icon="mdi:magnify"></ha-icon></button>
         </div>
 
         <div class="volume-wrap">
@@ -1616,12 +1650,12 @@ class PhicommR1Card extends HTMLElement {
         <div class="results">
           ${playback.items.length === 0 ? `
             <div class="empty">
-              Chưa có kết quả tìm kiếm. Nhập từ khóa và bấm Search.
+              Chưa có kết quả tìm kiếm. Nhập từ khóa và bấm Tìm kiếm.
             </div>
           ` : playback.items.map((item, idx) => {
             const itemId = this._layIdMucMedia(item);
-            const itemTitle = item.title || `Track ${idx + 1}`;
-            const itemArtist = item.artist || item.channel || "Unknown";
+            const itemTitle = item.title || `Bản nhạc ${idx + 1}`;
+            const itemArtist = item.artist || item.channel || "Chưa rõ nghệ sĩ";
             return `
             <div
               class="result-item ${itemId ? "playable" : ""}"
@@ -1649,7 +1683,7 @@ class PhicommR1Card extends HTMLElement {
                 </button>
                 <button class="mini-btn mini-btn-danger play-btn" data-id="${this._maHoaHtml(itemId)}" data-source="${this._maHoaHtml(listSource)}">
                   <ha-icon icon="mdi:play"></ha-icon>
-                  <span>Phat</span>
+                  <span>Phát</span>
                 </button>
               </div>
             </div>
@@ -1667,7 +1701,7 @@ class PhicommR1Card extends HTMLElement {
 
         <div class="tile">
           <div class="label-line">
-            <strong>Wake Word</strong>
+            <strong>Từ khóa đánh thức</strong>
             <label class="switch">
               <input id="wake-enabled" type="checkbox" ${this._wakeEnabled ? "checked" : ""} />
               <span class="slider"></span>
@@ -1760,7 +1794,7 @@ class PhicommR1Card extends HTMLElement {
         ? `
             <div class="chat-empty">
               <strong>Chưa có lịch sử chat</strong>
-              <span>Hãy gửi một tin nhắn hoặc dùng Wake Up để bắt đầu phiên trò chuyện.</span>
+              <span>Hãy gửi một tin nhắn hoặc dùng Đánh thức để bắt đầu phiên trò chuyện.</span>
             </div>
           `
         : history
@@ -1793,14 +1827,14 @@ class PhicommR1Card extends HTMLElement {
                 <ha-icon icon="mdi:chat-processing"></ha-icon>
               </div>
               <div class="chat-shell-title-stack">
-                <h3 class="chat-shell-title">Chat</h3>
+                <h3 class="chat-shell-title">Trò chuyện</h3>
                 <div class="chat-shell-subtitle">${this._maHoaHtml(buttonTextLabel)}</div>
               </div>
             </div>
             <div class="chat-shell-tools">
-              <span class="chat-shell-pill chat-state-pill ${statusToneClass}">${this._maHoaHtml(statusLabel)}</span>
+              <span class="chat-shell-pill chat-state-pill ${statusToneClass}">${this._maHoaHtml(this._layNhanTrangThaiChatHienThi(statusLabel))}</span>
               <span class="chat-shell-pill chat-meta-pill">${this._maHoaHtml(buttonStateText)}</span>
-              <button id="chat-refresh" class="chat-tool-btn" title="Làm mới">
+              <button id="chat-refresh" class="chat-tool-btn" title="Refresh">
                 <ha-icon icon="mdi:refresh"></ha-icon>
               </button>
             </div>
@@ -1814,11 +1848,11 @@ class PhicommR1Card extends HTMLElement {
             <div class="chat-quick-actions">
               <button id="chat-wakeup" class="chat-quick-btn chat-quick-btn-primary">
                 <ha-icon icon="mdi:microphone"></ha-icon>
-                <span>Wake Up</span>
+                <span>Đánh thức</span>
               </button>
               <button id="chat-testmic" class="chat-quick-btn">
                 <ha-icon icon="mdi:waveform"></ha-icon>
-                <span>Test Mic</span>
+                <span>Thử mic</span>
               </button>
             </div>
             <div class="chat-composer">
@@ -1855,8 +1889,8 @@ class PhicommR1Card extends HTMLElement {
                   <ha-icon icon="mdi:tune-vertical-variant"></ha-icon>
                 </div>
                 <div class="audio-engine-copy">
-                  <strong>Audio Engine</strong>
-                  <span>Equalizer đồng bộ trực tiếp với loa</span>
+                  <strong>Bộ âm thanh</strong>
+                  <span>Bộ cân bằng đồng bộ trực tiếp với loa</span>
                 </div>
               </div>
               <div class="audio-engine-actions">
@@ -1872,7 +1906,7 @@ class PhicommR1Card extends HTMLElement {
 
             <div class="audio-engine-meta">
               <span id="eq-status-chip" class="audio-engine-chip ${this._eqEnabled ? "" : "is-off"}">
-                ${this._eqEnabled ? "EQ On" : "EQ Off"}
+                ${this._eqEnabled ? "EQ bật" : "EQ tắt"}
               </span>
               <span class="audio-engine-hint">Kéo từng dải tần rồi thả ra để gửi xuống loa</span>
             </div>
@@ -1905,11 +1939,11 @@ class PhicommR1Card extends HTMLElement {
             </div>
 
             <div class="actions-inline eq-presets">
-            <button class="mini-btn eq-preset" data-preset="flat">Flat</button>
+            <button class="mini-btn eq-preset" data-preset="flat">Phẳng</button>
             <button class="mini-btn eq-preset" data-preset="bass">Bass Boost</button>
-            <button class="mini-btn eq-preset" data-preset="vocal">Vocal</button>
-            <button class="mini-btn eq-preset" data-preset="rock">Rock</button>
-            <button class="mini-btn eq-preset" data-preset="jazz">Jazz</button>
+            <button class="mini-btn eq-preset" data-preset="vocal">Giọng hát</button>
+            <button class="mini-btn eq-preset" data-preset="rock">Nhạc rock</button>
+            <button class="mini-btn eq-preset" data-preset="jazz">Nhạc jazz</button>
             </div>
           </div>
         </div>
@@ -1939,10 +1973,10 @@ class PhicommR1Card extends HTMLElement {
         </div>
 
         <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:lightbulb"></ha-icon> Lighting Control</h4>
+          <h4 class="sub-section-title"><ha-icon icon="mdi:lightbulb"></ha-icon> Điều khiển đèn</h4>
           <div class="subtabs">
             <button class="subtab ${this._lightingTab === "main" ? "active" : ""}" data-lighting-tab="main">Đèn Chính (RGB)</button>
-            <button class="subtab ${this._lightingTab === "edge" ? "active" : ""}" data-lighting-tab="edge">Đèn Viền (Edge)</button>
+            <button class="subtab ${this._lightingTab === "edge" ? "active" : ""}" data-lighting-tab="edge">Đèn viền</button>
           </div>
 
           ${this._lightingTab === "main" ? `
@@ -1994,7 +2028,7 @@ class PhicommR1Card extends HTMLElement {
     if (!this.shadowRoot) return;
     if (!this._config) {
       this._xoaHenGioTienDo();
-      this.shadowRoot.innerHTML = `<ha-card><div style="padding:16px;">Phicomm R1 Card: missing config.</div></ha-card>`;
+      this.shadowRoot.innerHTML = `<ha-card><div style="padding:16px;">Thẻ Phicomm R1 đang thiếu cấu hình.</div></ha-card>`;
       return;
     }
 
@@ -2003,7 +2037,7 @@ class PhicommR1Card extends HTMLElement {
       this._xoaHenGioTienDo();
       this.shadowRoot.innerHTML = `
         <ha-card>
-          <div style="padding:16px;">Entity <strong>${this._maHoaHtml(this._config.entity)}</strong> not found.</div>
+          <div style="padding:16px;">Không tìm thấy entity <strong>${this._maHoaHtml(this._config.entity)}</strong>.</div>
         </ha-card>
       `;
       return;
@@ -2012,7 +2046,7 @@ class PhicommR1Card extends HTMLElement {
     const tabs = [
       { key: "media", icon: "mdi:music-note", label: "Media" },
       { key: "control", icon: "mdi:tune-variant", label: "Control" },
-      { key: "chat", icon: "mdi:chat-processing", label: "Chat" },
+      { key: "chat", icon: "mdi:chat-processing", label: "Trò chuyện" },
       { key: "system", icon: "mdi:cog", label: "System" },
     ];
 
