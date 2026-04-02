@@ -1,0 +1,427 @@
+type: vertical-stack
+cards:
+  - type: media-control
+    entity: media_player.phicomm_r1
+
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+      - type: button
+        name: Prev
+        icon: mdi:skip-previous
+        tap_action:
+          action: call-service
+          service: media_player.media_previous_track
+          target:
+            entity_id: media_player.phicomm_r1
+      - type: button
+        name: Play/Pause
+        icon: mdi:play-pause
+        tap_action:
+          action: call-service
+          service: media_player.media_play_pause
+          target:
+            entity_id: media_player.phicomm_r1
+      - type: button
+        name: Stop
+        icon: mdi:stop
+        tap_action:
+          action: call-service
+          service: media_player.media_stop
+          target:
+            entity_id: media_player.phicomm_r1
+      - type: button
+        name: Next
+        icon: mdi:skip-next
+        tap_action:
+          action: call-service
+          service: media_player.media_next_track
+          target:
+            entity_id: media_player.phicomm_r1
+      - type: button
+        name: Vol -
+        icon: mdi:volume-minus
+        tap_action:
+          action: call-service
+          service: media_player.volume_down
+          target:
+            entity_id: media_player.phicomm_r1
+      - type: button
+        name: Vol +
+        icon: mdi:volume-plus
+        tap_action:
+          action: call-service
+          service: media_player.volume_up
+          target:
+            entity_id: media_player.phicomm_r1
+      - type: button
+        name: Mute
+        icon: mdi:volume-mute
+        tap_action:
+          action: call-service
+          service: media_player.volume_mute
+          target:
+            entity_id: media_player.phicomm_r1
+          data:
+            is_volume_muted: true
+      - type: button
+        name: Refresh
+        icon: mdi:refresh
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_refresh_all
+
+  - type: entities
+    title: Tìm kiếm nhạc (YouTube / Playlist / Zing)
+    show_header_toggle: false
+    entities:
+      - input_text.phicomm_r1_music_query
+      - input_text.phicomm_r1_youtube_video_id
+      - input_text.phicomm_r1_zing_song_id
+
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+      - type: button
+        name: Search YouTube
+        icon: mdi:youtube
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_search_youtube
+      - type: button
+        name: Search Playlist
+        icon: mdi:playlist-play
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_search_playlist
+      - type: button
+        name: Search Zing
+        icon: mdi:music-note-search
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_search_zing
+      - type: button
+        name: Play YouTube ID
+        icon: mdi:play-circle
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_play_youtube
+      - type: button
+        name: Play Zing ID
+        icon: mdi:play-circle-outline
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_play_zing
+      - type: button
+        name: Play KQ #1
+        icon: mdi:play-network
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_play_first_result
+
+  - type: markdown
+    title: Kết quả tìm kiếm gần nhất
+    content: >
+      {% set s = state_attr('media_player.phicomm_r1', 'last_music_search') %}
+      {% set p = state_attr('media_player.phicomm_r1', 'last_music_play') %}
+      {% if s %}
+      **Source:** {{ s.source }}  
+      **Query:** {{ s.query }}  
+      **Total:** {{ s.total }}  
+      {% for item in s.items[:10] %}
+      - {{ loop.index }}. **{{ item.title }}**{% if item.artist %} - {{ item.artist }}{% endif %}{% if item.id %} (ID: `{{ item.id }}`){% endif %}
+      {% endfor %}
+      {% else %}
+      Chưa có kết quả tìm kiếm.
+      {% endif %}
+      {% if p %}
+      
+      **Last play:** {{ p.source }} / `{{ p.id }}`
+      {% endif %}
+
+  - type: entities
+    title: Wake Word / Chống Điếc AI / Chat
+    show_header_toggle: false
+    entities:
+      - input_boolean.phicomm_r1_wake_word_enabled
+      - input_number.phicomm_r1_wake_word_sensitivity
+      - input_boolean.phicomm_r1_anti_deaf_enabled
+      - input_text.phicomm_r1_chat_text
+
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+      - type: button
+        name: Wake Word Apply
+        icon: mdi:microphone
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_wake_word_apply
+      - type: button
+        name: Set Sensitivity
+        icon: mdi:tune-variant
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_wake_word_set_sensitivity
+      - type: button
+        name: Wake Word Refresh
+        icon: mdi:refresh
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_wake_word_refresh
+      - type: button
+        name: AI Apply
+        icon: mdi:head-cog
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_anti_deaf_ai_apply
+      - type: button
+        name: AI Refresh
+        icon: mdi:head-sync
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_anti_deaf_ai_refresh
+      - type: button
+        name: Chat Wake Up
+        icon: mdi:robot-happy
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_chat_wake_up
+      - type: button
+        name: Chat Test Mic
+        icon: mdi:microphone-message
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_chat_test_mic
+      - type: button
+        name: Chat Send Text
+        icon: mdi:send
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_chat_send_text
+      - type: button
+        name: Chat Refresh
+        icon: mdi:history
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_chat_refresh
+
+  - type: entities
+    title: Kết nối hệ thống
+    show_header_toggle: false
+    entities:
+      - input_boolean.phicomm_r1_dlna_enabled
+      - input_boolean.phicomm_r1_airplay_enabled
+      - input_boolean.phicomm_r1_bluetooth_enabled
+
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+      - type: button
+        name: Apply DLNA
+        icon: mdi:dlna
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_dlna
+      - type: button
+        name: Apply AirPlay
+        icon: mdi:airplay
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_airplay
+      - type: button
+        name: Apply Bluetooth
+        icon: mdi:bluetooth
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_bluetooth
+      - type: button
+        name: Reboot
+        icon: mdi:restart
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_reboot
+
+  - type: entities
+    title: Đèn
+    show_header_toggle: false
+    entities:
+      - input_boolean.phicomm_r1_main_light_enabled
+      - input_number.phicomm_r1_light_mode
+      - input_number.phicomm_r1_light_speed
+      - input_number.phicomm_r1_light_brightness
+      - input_boolean.phicomm_r1_edge_light_enabled
+      - input_number.phicomm_r1_edge_light_intensity
+
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+      - type: button
+        name: Apply Main Light
+        icon: mdi:lightbulb
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_main_light
+      - type: button
+        name: Set Mode
+        icon: mdi:palette-outline
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_light_mode
+      - type: button
+        name: Set Speed
+        icon: mdi:speedometer
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_light_speed
+      - type: button
+        name: Set Brightness
+        icon: mdi:brightness-6
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_light_brightness
+      - type: button
+        name: Apply Edge Light
+        icon: mdi:led-strip-variant
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_edge_light
+
+  - type: entities
+    title: Âm thanh nâng cao (Bass / Loudness / EQ / Mixer)
+    show_header_toggle: false
+    entities:
+      - input_boolean.phicomm_r1_bass_enabled
+      - input_number.phicomm_r1_bass_strength
+      - input_boolean.phicomm_r1_loudness_enabled
+      - input_number.phicomm_r1_loudness_gain
+      - input_boolean.phicomm_r1_eq_enabled
+      - input_number.phicomm_r1_eq_band
+      - input_number.phicomm_r1_eq_level
+      - input_text.phicomm_r1_mixer_control_name
+      - input_number.phicomm_r1_mixer_value
+      - input_number.phicomm_r1_play_mode
+
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+      - type: button
+        name: Apply Bass
+        icon: mdi:music-clef-bass
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_bass_enable
+      - type: button
+        name: Set Bass Strength
+        icon: mdi:knob
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_bass_strength
+      - type: button
+        name: Apply Loudness
+        icon: mdi:volume-high
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_loudness_enable
+      - type: button
+        name: Set Loudness Gain
+        icon: mdi:equalizer-outline
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_loudness_gain
+      - type: button
+        name: Apply EQ
+        icon: mdi:equalizer
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_eq_enable
+      - type: button
+        name: Set EQ Band Level
+        icon: mdi:tune
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_eq_bandlevel
+      - type: button
+        name: Set Mixer
+        icon: mdi:knob
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_mixer_value
+      - type: button
+        name: Set Play Mode
+        icon: mdi:repeat-variant
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_set_play_mode
+
+  - type: entities
+    title: API nâng cao / Debug
+    show_header_toggle: false
+    entities:
+      - input_number.phicomm_r1_keycode
+      - input_text.phicomm_r1_run_command
+      - input_text.phicomm_r1_run_type_id
+      - input_number.phicomm_r1_send_message_what
+      - input_number.phicomm_r1_send_message_arg1
+      - input_number.phicomm_r1_send_message_arg2
+      - input_text.phicomm_r1_send_message_obj
+      - input_text.phicomm_r1_send_message_type_id
+      - input_text.phicomm_r1_ws_payload
+      - input_text.phicomm_r1_ws_expect_type
+
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+      - type: button
+        name: Send Keycode
+        icon: mdi:remote
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_send_keycode
+      - type: button
+        name: Run Command
+        icon: mdi:console
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_run_command
+      - type: button
+        name: Send Message
+        icon: mdi:message-cog
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_send_message
+      - type: button
+        name: WS Payload
+        icon: mdi:code-json
+        tap_action:
+          action: call-service
+          service: script.phicomm_r1_ws_send_payload
+
+  - type: markdown
+    title: Trạng thái tổng hợp
+    content: >
+      {% set w = state_attr('media_player.phicomm_r1', 'wake_word') %}
+      {% set a = state_attr('media_player.phicomm_r1', 'custom_ai') %}
+      {% set c = state_attr('media_player.phicomm_r1', 'chat_state') %}
+      {% set h = state_attr('media_player.phicomm_r1', 'last_chat_items') %}
+      **State:** {{ states('media_player.phicomm_r1') }}  
+      **Volume:** {{ state_attr('media_player.phicomm_r1', 'volume_current') }} / {{ state_attr('media_player.phicomm_r1', 'volume_max') }}  
+      **DLNA:** {{ state_attr('media_player.phicomm_r1', 'dlna_open') }} | **AirPlay:** {{ state_attr('media_player.phicomm_r1', 'airplay_open') }}  
+      **Main Light:** {{ state_attr('media_player.phicomm_r1', 'music_light_enable') }} | **Luma:** {{ state_attr('media_player.phicomm_r1', 'music_light_luma') }} | **Chroma:** {{ state_attr('media_player.phicomm_r1', 'music_light_chroma') }}  
+      **Wake Word:** {% if w %}enabled={{ w.enabled }}, sensitivity={{ w.sensitivity }}{% else %}n/a{% endif %}  
+      **Chống Điếc AI:** {% if a %}enabled={{ a.enabled }}{% else %}n/a{% endif %}  
+      **Chat:** {% if c %}state={{ c.state }}, button={{ c.button_text }}, enabled={{ c.button_enabled }}{% else %}n/a{% endif %}  
+      {% if h %}
+      
+      **Chat history (mới nhất):**  
+      {% for item in h[-8:] %}
+      - [{{ item.message_type if item.message_type is defined else 'msg' }}] {{ item.content if item.content is defined else item.message if item.message is defined else item.text if item.text is defined else item }}
+      {% endfor %}
+      {% endif %}

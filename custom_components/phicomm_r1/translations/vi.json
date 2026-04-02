@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thiết lập Phicomm R1",
+        "description": "Kết nối Home Assistant với Phicomm R1 (HTTP bridge hoặc WebSocket native).",
+        "data": {
+          "name": "Tên",
+          "host": "Host",
+          "port": "Cổng",
+          "aibox_ws_port": "Cổng WS media (YouTube/Zing)",
+          "scan_interval": "Chu kỳ cập nhật (giây)",
+          "use_media_dispatch": "Dùng /media-dispatch để điều khiển phát",
+          "protocol": "Chế độ giao thức (auto/http_bridge/ws_native)",
+          "endpoint_do_cmd": "Endpoint cho shell command",
+          "endpoint_adb_cmd": "Endpoint cho ADB command",
+          "endpoint_keyevent": "Endpoint cho key event",
+          "endpoint_media_dispatch": "Endpoint cho media dispatch",
+          "param_command": "Tên query param cho command",
+          "param_keycode": "Tên query param cho keycode",
+          "param_media_key": "Tên query param cho media action",
+          "response_code_key": "Tên field mã trạng thái trong response",
+          "response_message_key": "Tên field message trong response",
+          "response_result_key": "Tên field result trong response",
+          "response_success_code": "Giá trị code thành công"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Không thể kết nối",
+      "invalid_response": "API trả về dữ liệu không hợp lệ",
+      "unknown": "Lỗi không xác định"
+    },
+    "abort": {
+      "already_configured": "Thiết bị này đã được cấu hình"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tùy chọn Phicomm R1",
+        "data": {
+          "name": "Tên",
+          "host": "Host",
+          "port": "Cổng",
+          "aibox_ws_port": "Cổng WS media (YouTube/Zing)",
+          "scan_interval": "Chu kỳ cập nhật (giây)",
+          "use_media_dispatch": "Dùng /media-dispatch để điều khiển phát",
+          "protocol": "Chế độ giao thức (auto/http_bridge/ws_native)",
+          "endpoint_do_cmd": "Endpoint cho shell command",
+          "endpoint_adb_cmd": "Endpoint cho ADB command",
+          "endpoint_keyevent": "Endpoint cho key event",
+          "endpoint_media_dispatch": "Endpoint cho media dispatch",
+          "param_command": "Tên query param cho command",
+          "param_keycode": "Tên query param cho keycode",
+          "param_media_key": "Tên query param cho media action",
+          "response_code_key": "Tên field mã trạng thái trong response",
+          "response_message_key": "Tên field message trong response",
+          "response_result_key": "Tên field result trong response",
+          "response_success_code": "Giá trị code thành công"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Không thể kết nối",
+      "invalid_response": "API trả về dữ liệu không hợp lệ",
+      "unknown": "Lỗi không xác định"
+    }
+  }
+}
