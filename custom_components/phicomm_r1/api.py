@@ -387,6 +387,48 @@ class PhicommR1ApiClient:
             return any(self._aibox_loai_khop(msg_kind, item) for item in expected)
         return self._aibox_loai_khop(msg_kind, expected)
 
+    @staticmethod
+    def _aibox_chuan_hoa_truy_van_tim_kiem(value: Any) -> str:
+        """Normalize search query text for reliable frame matching."""
+        return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+    @classmethod
+    def _aibox_lay_truy_van_tim_kiem(cls, payload: dict[str, Any]) -> str:
+        """Extract echoed search query from common payload field names."""
+        for key in ("query", "keyword", "search_text", "searchText", "text"):
+            if key not in payload:
+                continue
+            normalized = cls._aibox_chuan_hoa_truy_van_tim_kiem(payload.get(key))
+            if normalized:
+                return normalized
+        return ""
+
+    @classmethod
+    def _aibox_chon_ket_qua_tim_kiem(
+        cls,
+        responses: list[dict[str, Any]],
+        expected_query: str,
+    ) -> dict[str, Any] | None:
+        """Pick the safest search result frame from a burst of WS messages."""
+        exact_matches: list[dict[str, Any]] = []
+        queryless_matches: list[dict[str, Any]] = []
+
+        for response in responses:
+            if not isinstance(response, dict):
+                continue
+            response_query = cls._aibox_lay_truy_van_tim_kiem(response)
+            if response_query:
+                if expected_query and response_query == expected_query:
+                    exact_matches.append(response)
+                continue
+            queryless_matches.append(response)
+
+        if exact_matches:
+            return exact_matches[-1]
+        if queryless_matches:
+            return queryless_matches[-1]
+        return None
+
     def _aibox_cap_nhat_bo_nho_phat(
         self,
         payload: dict[str, Any],
@@ -700,6 +742,37 @@ class PhicommR1ApiClient:
         except ClientError as err:
             raise PhicommR1ApiConnectionError(str(err)) from err
         return items
+
+    async def _aibox_gui_va_chon_ket_qua_tim_kiem(
+        self,
+        payload: dict[str, Any],
+        *,
+        expect_type: str,
+        query: str,
+        first_timeout: float = 6.0,
+        collect_window: float = 0.9,
+        max_items: int = 12,
+    ) -> dict[str, Any]:
+        """Send a search request and choose the freshest matching result frame."""
+        responses = await self._aibox_gui_va_thu_thap(
+            payload,
+            collect_types={expect_type},
+            first_timeout=first_timeout,
+            collect_window=collect_window,
+            max_items=max_items,
+        )
+        expected_query = self._aibox_chuan_hoa_truy_van_tim_kiem(query)
+        selected = self._aibox_chon_ket_qua_tim_kiem(responses, expected_query)
+        if selected is not None:
+            return selected
+
+        _LOGGER.debug(
+            "Aibox search frames did not match query=%s expect_type=%s responses=%s",
+            expected_query,
+            expect_type,
+            responses,
+        )
+        raise PhicommR1ApiConnectionError("AiboxPlus search response did not match requested query")
 
     def _ws_kiem_tra_ma(self, response: dict[str, Any]) -> None:
         """Validate optional code field in WS response."""
@@ -1309,8 +1382,12 @@ class PhicommR1ApiClient:
         last_err: Exception | None = None
         for _ in range(2):
             try:
-                return await self._aibox_gui_va_cho(request, expect_type="search_result")
-            except PhicommR1ApiConnectionError as err:
+                return await self._aibox_gui_va_chon_ket_qua_tim_kiem(
+                    request,
+                    expect_type="search_result",
+                    query=normalized_query,
+                )
+            except (PhicommR1ApiConnectionError, PhicommR1ApiResponseError) as err:
                 last_err = err
                 await asyncio.sleep(0.35)
                 continue
@@ -1326,8 +1403,12 @@ class PhicommR1ApiClient:
         last_err: Exception | None = None
         for _ in range(2):
             try:
-                return await self._aibox_gui_va_cho(request, expect_type="playlist_result")
-            except PhicommR1ApiConnectionError as err:
+                return await self._aibox_gui_va_chon_ket_qua_tim_kiem(
+                    request,
+                    expect_type="playlist_result",
+                    query=normalized_query,
+                )
+            except (PhicommR1ApiConnectionError, PhicommR1ApiResponseError) as err:
                 last_err = err
                 await asyncio.sleep(0.35)
                 continue
@@ -1343,8 +1424,12 @@ class PhicommR1ApiClient:
         last_err: Exception | None = None
         for _ in range(2):
             try:
-                return await self._aibox_gui_va_cho(request, expect_type="zing_result")
-            except PhicommR1ApiConnectionError as err:
+                return await self._aibox_gui_va_chon_ket_qua_tim_kiem(
+                    request,
+                    expect_type="zing_result",
+                    query=normalized_query,
+                )
+            except (PhicommR1ApiConnectionError, PhicommR1ApiResponseError) as err:
                 last_err = err
                 await asyncio.sleep(0.35)
                 continue

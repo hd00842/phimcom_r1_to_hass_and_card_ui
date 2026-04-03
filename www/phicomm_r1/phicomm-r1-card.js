@@ -1443,15 +1443,6 @@ class PhicommR1Card extends HTMLElement {
         }
         daCoKetQuaMoi = await this._choKetQuaTimKiemMoi(query, source, mocTruoc, dauVetTruoc, 4000);
       }
-
-      if (!daCoKetQuaMoi) {
-        // Last fallback for same-query searches where payload may be unchanged.
-        daCoKetQuaMoi = this._ketQuaTimKiemKhopYeuCau(
-          this._thuocTinh().last_music_search || {},
-          query,
-          source
-        );
-      }
     } finally {
       this._dangChoKetQuaTimKiem = false;
       this._timKiemDangCho = null;
@@ -1460,7 +1451,7 @@ class PhicommR1Card extends HTMLElement {
       const coKetQuaMoi =
         coKetQuaPhuHop &&
         this._laKetQuaTimKiemMoi(searchSauCung, query, source, mocTruoc, dauVetTruoc);
-      if (daCoKetQuaMoi || coKetQuaMoi || coKetQuaPhuHop) {
+      if (daCoKetQuaMoi || coKetQuaMoi) {
         this._veGiaoDienGiuFocusTimKiem();
       } else {
         this._pendingRender = true;
@@ -1696,9 +1687,7 @@ class PhicommR1Card extends HTMLElement {
 
   _veTabDieuKhien() {
     return `
-      <section class="panel">
-        <h3 class="section-title"><ha-icon icon="mdi:tune-variant"></ha-icon> Control</h3>
-
+      <section class="panel" aria-label="Control">
         <div class="tile">
           <div class="label-line">
             <strong>Từ khóa đánh thức</strong>
@@ -1827,7 +1816,7 @@ class PhicommR1Card extends HTMLElement {
                 <ha-icon icon="mdi:chat-processing"></ha-icon>
               </div>
               <div class="chat-shell-title-stack">
-                <h3 class="chat-shell-title">Trò chuyện</h3>
+                <h3 class="chat-shell-title">Chat</h3>
                 <div class="chat-shell-subtitle">${this._maHoaHtml(buttonTextLabel)}</div>
               </div>
             </div>
@@ -1878,9 +1867,7 @@ class PhicommR1Card extends HTMLElement {
       [7, "Hơi thở"],
     ];
     return `
-      <section class="panel">
-        <h3 class="section-title"><ha-icon icon="mdi:cog"></ha-icon> System</h3>
-
+      <section class="panel panel-system" aria-label="System">
         <div class="tile">
           <div class="audio-engine-shell">
             <div class="audio-engine-head">
@@ -2046,7 +2033,7 @@ class PhicommR1Card extends HTMLElement {
     const tabs = [
       { key: "media", icon: "mdi:music-note", label: "Media" },
       { key: "control", icon: "mdi:tune-variant", label: "Control" },
-      { key: "chat", icon: "mdi:chat-processing", label: "Trò chuyện" },
+      { key: "chat", icon: "mdi:chat-processing", label: "Chat" },
       { key: "system", icon: "mdi:cog", label: "System" },
     ];
 
@@ -3551,6 +3538,308 @@ class PhicommR1Card extends HTMLElement {
           .eq-vertical-slider {
             width: 24px;
             height: 150px;
+          }
+        }
+
+        .panel-system {
+          border: 0;
+          border-radius: 0;
+          background: transparent;
+          padding: 0;
+          box-shadow: none;
+        }
+
+        .panel-system .section-title {
+          margin: 0 0 10px;
+          gap: 8px;
+          font-size: 26px;
+        }
+
+        .panel-system .section-title ha-icon {
+          --mdc-icon-size: 22px;
+        }
+
+        .panel-system .sub-section-title {
+          margin: 0 0 6px;
+          gap: 6px;
+          font-size: 17px;
+        }
+
+        .panel-system .sub-section-title ha-icon {
+          --mdc-icon-size: 18px;
+        }
+
+        .panel-system .tile {
+          padding: 9px 10px;
+          margin-bottom: 6px;
+          border-radius: 13px;
+        }
+
+        .panel-system .tile.in-tile {
+          margin: 6px 0 0;
+          padding: 8px 9px;
+        }
+
+        .panel-system .label-line {
+          margin-bottom: 6px;
+        }
+
+        .panel-system .actions-inline {
+          gap: 6px;
+          margin-top: 6px;
+        }
+
+        .panel-system .audio-engine-shell {
+          gap: 10px;
+        }
+
+        .panel-system .audio-engine-head {
+          gap: 10px;
+        }
+
+        .panel-system .audio-engine-title-wrap {
+          gap: 10px;
+        }
+
+        .panel-system .audio-engine-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 12px;
+        }
+
+        .panel-system .audio-engine-icon ha-icon {
+          --mdc-icon-size: 18px;
+        }
+
+        .panel-system .audio-engine-copy {
+          gap: 2px;
+        }
+
+        .panel-system .audio-engine-copy strong {
+          font-size: 18px;
+        }
+
+        .panel-system .audio-engine-copy span {
+          font-size: 12px;
+          line-height: 1.3;
+        }
+
+        .panel-system .audio-engine-actions {
+          gap: 8px;
+        }
+
+        .panel-system .audio-engine-tabs {
+          padding: 4px;
+          border-radius: 14px;
+        }
+
+        .panel-system .audio-engine-tab {
+          padding: 8px 14px;
+          border-radius: 10px;
+          font-size: 12px;
+          box-shadow: 0 8px 14px rgba(64, 98, 255, 0.2);
+        }
+
+        .panel-system .audio-engine-meta {
+          gap: 8px;
+        }
+
+        .panel-system .audio-engine-chip {
+          min-height: 26px;
+          padding: 0 10px;
+          font-size: 11px;
+        }
+
+        .panel-system .audio-engine-hint {
+          font-size: 11px;
+          line-height: 1.3;
+        }
+
+        .panel-system .eq-vertical-shell {
+          grid-template-columns: repeat(5, minmax(52px, 1fr));
+          gap: 8px;
+          padding: 4px 2px 0;
+        }
+
+        .panel-system .eq-band-column {
+          gap: 8px;
+        }
+
+        .panel-system .eq-band-level {
+          min-height: 16px;
+          font-size: 11px;
+        }
+
+        .panel-system .eq-band-slider-wrap {
+          min-height: 192px;
+        }
+
+        .panel-system .eq-vertical-slider {
+          width: 20px;
+          height: 168px;
+        }
+
+        .panel-system .eq-band-name {
+          font-size: 12px;
+        }
+
+        .panel-system .eq-presets {
+          margin-top: 0;
+        }
+
+        .panel-system .mini-btn {
+          padding: 7px 11px;
+          border-radius: 10px;
+          font-size: 12px;
+        }
+
+        .panel-system .eq-presets .mini-btn {
+          padding: 7px 12px;
+          border-radius: 999px;
+        }
+
+        .panel-system .subtabs {
+          gap: 6px;
+          padding: 6px 0 4px;
+        }
+
+        .panel-system .subtab {
+          min-height: 38px;
+          padding: 8px 6px;
+          border-radius: 10px;
+          font-size: 13px;
+        }
+
+        .panel-system .switch {
+          width: 44px;
+          height: 26px;
+        }
+
+        .panel-system .slider::before {
+          width: 20px;
+          height: 20px;
+        }
+
+        .panel-system .switch input:checked + .slider::before {
+          transform: translateX(18px);
+        }
+
+        .panel-system .danger-btn {
+          min-height: 40px;
+          border-radius: 11px;
+          font-size: 14px;
+          gap: 7px;
+        }
+
+        .panel-system .danger-btn ha-icon {
+          --mdc-icon-size: 20px;
+        }
+
+        .panel-system input[type="range"]:not(.eq-vertical-slider) {
+          height: 18px;
+          background: transparent;
+          appearance: none;
+          -webkit-appearance: none;
+        }
+
+        .panel-system input[type="range"]:not(.eq-vertical-slider)::-webkit-slider-runnable-track {
+          height: 6px;
+          border-radius: 999px;
+          background: rgba(117, 136, 170, 0.45);
+        }
+
+        .panel-system input[type="range"]:not(.eq-vertical-slider)::-webkit-slider-thumb {
+          width: 16px;
+          height: 16px;
+          margin-top: -5px;
+          border: 0;
+          border-radius: 50%;
+          background: #4f8dff;
+          box-shadow: 0 0 0 2px rgba(79, 141, 255, 0.18);
+          cursor: pointer;
+          -webkit-appearance: none;
+        }
+
+        .panel-system input[type="range"]:not(.eq-vertical-slider)::-moz-range-track {
+          height: 6px;
+          border: 0;
+          border-radius: 999px;
+          background: rgba(117, 136, 170, 0.45);
+        }
+
+        .panel-system input[type="range"]:not(.eq-vertical-slider)::-moz-range-progress {
+          height: 6px;
+          border-radius: 999px;
+          background: #4f8dff;
+        }
+
+        .panel-system input[type="range"]:not(.eq-vertical-slider)::-moz-range-thumb {
+          width: 16px;
+          height: 16px;
+          border: 0;
+          border-radius: 50%;
+          background: #4f8dff;
+          box-shadow: 0 0 0 2px rgba(79, 141, 255, 0.18);
+          cursor: pointer;
+        }
+
+        @media (max-width: 900px) {
+          .panel-system .section-title {
+            font-size: 24px;
+          }
+
+          .panel-system .audio-engine-copy strong {
+            font-size: 17px;
+          }
+
+          .panel-system .eq-band-slider-wrap {
+            min-height: 178px;
+          }
+
+          .panel-system .eq-vertical-slider {
+            height: 154px;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .panel-system {
+            padding: 0;
+          }
+
+          .panel-system .section-title {
+            font-size: 22px;
+          }
+
+          .panel-system .audio-engine-head {
+            gap: 8px;
+          }
+
+          .panel-system .audio-engine-actions {
+            gap: 7px;
+          }
+
+          .panel-system .eq-vertical-shell {
+            grid-template-columns: repeat(5, minmax(42px, 1fr));
+            gap: 6px;
+          }
+
+          .panel-system .eq-band-slider-wrap {
+            min-height: 156px;
+          }
+
+          .panel-system .eq-vertical-slider {
+            width: 18px;
+            height: 132px;
+          }
+
+          .panel-system .mini-btn {
+            padding: 7px 10px;
+            font-size: 11.5px;
+          }
+
+          .panel-system .subtab {
+            min-height: 36px;
+            font-size: 12px;
           }
         }
       </style>
