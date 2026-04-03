@@ -109,13 +109,26 @@ class PhicommR1Card extends HTMLElement {
     return 12;
   }
 
+  _chuanHoaKichThuocCss(value) {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value > 0 ? `${value}px` : "";
+    }
+    const normalized = String(value).trim();
+    if (!normalized) return "";
+    if (/^\d+(\.\d+)?$/.test(normalized)) return `${normalized}px`;
+    return normalized;
+  }
+
   setConfig(config) {
     if (!config || !config.entity) {
       throw new Error("Phicomm R1 Card: 'entity' is required");
     }
+    const maxHeight = this._chuanHoaKichThuocCss(config.max_height ?? config.maxHeight);
     this._config = {
       title: "Phicomm R1",
       ...config,
+      max_height: maxHeight,
     };
     this._lastEntityRef = null;
     this._pendingRender = false;
@@ -1619,7 +1632,7 @@ class PhicommR1Card extends HTMLElement {
         </div>
 
         <div class="subtabs">
-          <button class="subtab ${this._mediaSearchTab === "songs" ? "active" : ""}" data-media-tab="songs">Songs</button>
+          <button class="subtab ${this._mediaSearchTab === "songs" ? "active" : ""}" data-media-tab="songs">Youtube</button>
           <button class="subtab ${this._mediaSearchTab === "playlist" ? "active" : ""}" data-media-tab="playlist">Playlist</button>
           <button class="subtab ${this._mediaSearchTab === "zing" ? "active" : ""}" data-media-tab="zing">Zing MP3</button>
           <button class="subtab ${this._mediaSearchTab === "playlists" ? "active" : ""}" data-media-tab="playlists">Playlists</button>
@@ -2042,6 +2055,11 @@ class PhicommR1Card extends HTMLElement {
     if (this._activeTab === "control") body = this._veTabDieuKhien();
     if (this._activeTab === "chat") body = this._veTabChat();
     if (this._activeTab === "system") body = this._veTabHeThong();
+    const maxHeightCss = this._config?.max_height || "";
+    const cardShellClass = `card-shell${maxHeightCss ? " constrained" : ""}`;
+    const cardShellStyle = maxHeightCss
+      ? ` style="--card-max-height:${this._maHoaHtml(maxHeightCss)};"`
+      : "";
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -2080,37 +2098,85 @@ class PhicommR1Card extends HTMLElement {
           padding: 4px 0 0;
         }
 
+        .card-shell {
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+        }
+
+        .card-shell.constrained {
+          max-height: var(--card-max-height);
+          min-height: 0;
+        }
+
+        .card-body {
+          min-height: 0;
+        }
+
+        .card-shell.constrained .card-body {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+          overscroll-behavior: contain;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+
+        .card-shell.constrained .card-body::-webkit-scrollbar {
+          width: 0;
+          height: 0;
+          display: none;
+        }
+
         .top-tabs {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
-          gap: 8px;
-          padding: 8px 10px;
+          gap: 6px;
+          padding: 6px 8px;
           border: 1px solid rgba(101, 125, 255, 0.35);
-          border-radius: 14px;
-          background: rgba(10, 22, 48, 0.75);
-          margin: 0 0 12px;
+          border-radius: 12px;
+          background: rgba(10, 22, 48, 0.86);
+          margin: 0 0 10px;
+          flex: 0 0 auto;
+          position: relative;
+          z-index: 1;
         }
 
         .tab-btn {
           border: 0;
           background: rgba(255, 255, 255, 0.03);
           color: var(--muted);
-          border-radius: 12px;
-          padding: 12px 10px;
-          font-size: 15px;
+          border-radius: 10px;
+          padding: 10px 8px;
+          font-size: 13px;
           font-weight: 700;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 8px;
+          gap: 6px;
           cursor: pointer;
           transition: all 0.2s ease;
+          min-width: 0;
+        }
+
+        .tab-btn ha-icon {
+          --mdc-icon-size: 20px;
+        }
+
+        .tab-btn span {
+          display: block;
+          min-width: 0;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .tab-btn.active {
           color: #fff;
           background: linear-gradient(120deg, #6466f1, #8b5cf6);
-          box-shadow: 0 8px 18px rgba(122, 99, 255, 0.35);
+          box-shadow: 0 6px 14px rgba(122, 99, 255, 0.32);
         }
 
         .panel {
@@ -2501,6 +2567,28 @@ class PhicommR1Card extends HTMLElement {
           grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
           gap: 12px;
           align-items: start;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(108, 127, 255, 0.72) rgba(9, 18, 40, 0.34);
+        }
+
+        .panel-media .results::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+
+        .panel-media .results::-webkit-scrollbar-track {
+          background: rgba(9, 18, 40, 0.34);
+          border-radius: 999px;
+        }
+
+        .panel-media .results::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, rgba(89, 128, 255, 0.94), rgba(126, 98, 255, 0.9));
+          border-radius: 999px;
+          border: 1px solid rgba(11, 20, 42, 0.16);
+        }
+
+        .panel-media .results::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, rgba(112, 146, 255, 0.98), rgba(142, 114, 255, 0.94));
         }
 
         .panel-media .empty {
@@ -2589,13 +2677,12 @@ class PhicommR1Card extends HTMLElement {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: normal;
-          line-height: 1.15;
+          line-height: 1;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
         }
 
         .result-artist {
-          margin-top: 3px;
           font-size: 12px;
           color: var(--muted);
           overflow: hidden;
@@ -2604,11 +2691,9 @@ class PhicommR1Card extends HTMLElement {
         }
 
         .result-duration {
-          margin-top: 1px;
-          font-size: 16px;
+          font-size: 10px;
           font-weight: 500;
           color: rgba(165, 184, 214, 0.78);
-          line-height: 1.2;
         }
 
         .result-actions {
@@ -2619,8 +2704,8 @@ class PhicommR1Card extends HTMLElement {
           align-items: center;
           justify-content: flex-end;
           flex-shrink: 0;
-          align-self: end;
-          margin-top: 8px;
+          align-self: center;
+          margin-top: 0;
         }
 
         .result-actions ha-icon {
@@ -3061,12 +3146,34 @@ class PhicommR1Card extends HTMLElement {
           overflow: auto;
           padding: 14px;
           gap: 12px;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(110, 128, 255, 0.72) rgba(9, 18, 40, 0.36);
           border-top: 1px solid rgba(87, 107, 230, 0.12);
           border-bottom: 1px solid rgba(87, 107, 230, 0.16);
           background:
             radial-gradient(520px 280px at 74% 50%, rgba(122, 99, 255, 0.12), transparent 62%),
             radial-gradient(300px 160px at 18% 8%, rgba(79, 141, 255, 0.1), transparent 58%),
             linear-gradient(180deg, rgba(11, 21, 46, 0.74), rgba(7, 14, 33, 0.92));
+        }
+
+        .chat-shell-history::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+
+        .chat-shell-history::-webkit-scrollbar-track {
+          background: rgba(9, 18, 40, 0.36);
+          border-radius: 999px;
+        }
+
+        .chat-shell-history::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, rgba(91, 129, 255, 0.95), rgba(128, 100, 255, 0.9));
+          border-radius: 999px;
+          border: 1px solid rgba(12, 20, 42, 0.18);
+        }
+
+        .chat-shell-history::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, rgba(114, 148, 255, 0.98), rgba(145, 116, 255, 0.94));
         }
 
         .chat-empty {
@@ -3346,7 +3453,17 @@ class PhicommR1Card extends HTMLElement {
           }
 
           .panel-media .subtabs {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 4px;
+            padding: 8px 10px 4px;
+          }
+
+          .panel-media .subtab {
+            min-width: 0;
+            padding: 7px 4px;
+            font-size: 11px;
+            border-radius: 9px;
+            letter-spacing: -0.01em;
           }
           .search-row .icon-btn {
             width: 40px;
@@ -3356,7 +3473,20 @@ class PhicommR1Card extends HTMLElement {
             --mdc-icon-size: 20px;
           }
           .top-tabs {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 4px;
+            padding: 4px;
+            margin-bottom: 8px;
+            border-radius: 10px;
+          }
+          .tab-btn {
+            padding: 8px 4px;
+            font-size: 11px;
+            gap: 4px;
+            border-radius: 9px;
+          }
+          .tab-btn ha-icon {
+            --mdc-icon-size: 16px;
           }
           .result-item {
             grid-template-columns: 48px minmax(0, 1fr) auto;
@@ -3384,7 +3514,8 @@ class PhicommR1Card extends HTMLElement {
 
           .result-actions {
             gap: 5px;
-            margin-top: 6px;
+            margin-top: 0;
+            align-self: center;
           }
 
           .mini-btn-accent {
@@ -3503,6 +3634,45 @@ class PhicommR1Card extends HTMLElement {
 
           .chat-send-btn ha-icon {
             --mdc-icon-size: 18px;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .top-tabs {
+            gap: 3px;
+            padding: 3px;
+          }
+
+          .tab-btn {
+            padding: 7px 3px;
+            font-size: 10.5px;
+            gap: 3px;
+            border-radius: 8px;
+          }
+
+          .tab-btn ha-icon {
+            --mdc-icon-size: 14px;
+          }
+
+          .chat-shell-history::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+          }
+
+          .panel-media .results::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+          }
+
+          .panel-media .subtabs {
+            gap: 3px;
+            padding: 7px 10px 4px;
+          }
+
+          .panel-media .subtab {
+            padding: 6px 3px;
+            font-size: 10px;
+            border-radius: 8px;
           }
         }
 
@@ -3845,19 +4015,23 @@ class PhicommR1Card extends HTMLElement {
       </style>
 
       <ha-card>
-        <div class="top-tabs">
-          ${tabs
-            .map(
-              (tab) => `
-                <button class="tab-btn ${this._activeTab === tab.key ? "active" : ""}" data-tab="${tab.key}">
-                  <ha-icon icon="${tab.icon}"></ha-icon>
-                  <span>${tab.label}</span>
-                </button>
-              `
-            )
-            .join("")}
+        <div class="${cardShellClass}"${cardShellStyle}>
+          <div class="top-tabs">
+            ${tabs
+              .map(
+                (tab) => `
+                  <button class="tab-btn ${this._activeTab === tab.key ? "active" : ""}" data-tab="${tab.key}">
+                    <ha-icon icon="${tab.icon}"></ha-icon>
+                    <span>${tab.label}</span>
+                  </button>
+                `
+              )
+              .join("")}
+          </div>
+          <div class="card-body">
+            ${body}
+          </div>
         </div>
-        ${body}
       </ha-card>
     `;
 
