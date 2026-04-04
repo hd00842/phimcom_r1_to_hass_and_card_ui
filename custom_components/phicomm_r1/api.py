@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import re
+import time
 from typing import Any, Awaitable, Callable, Mapping
 
 from aiohttp import (
@@ -452,15 +453,44 @@ class PhicommR1ApiClient:
                 "state",
                 "title",
                 "artist",
+                "channel",
                 "duration",
                 "position",
                 "thumbnail_url",
+                "source",
+                "id",
+                "video_id",
+                "song_id",
+                "playlist_id",
+                "url",
             )
         )
         if not is_playback_payload:
             return
 
         merged = dict(self._last_aibox_playback)
+        previous_title = str(merged.get("title", "") or "").strip()
+        previous_identity = str(
+            merged.get("video_id")
+            or merged.get("song_id")
+            or merged.get("playlist_id")
+            or merged.get("id")
+            or ""
+        ).strip()
+        incoming_title = str(payload.get("title", "") or "").strip()
+        incoming_identity = str(
+            payload.get("video_id")
+            or payload.get("song_id")
+            or payload.get("playlist_id")
+            or payload.get("id")
+            or ""
+        ).strip()
+        title_changed = bool(incoming_title and previous_title and incoming_title != previous_title)
+        identity_changed = bool(incoming_identity and previous_identity and incoming_identity != previous_identity)
+        if title_changed or identity_changed:
+            for key in ("id", "video_id", "song_id", "url"):
+                merged.pop(key, None)
+
         for key in (
             "is_playing",
             "play_state",
@@ -469,10 +499,17 @@ class PhicommR1ApiClient:
             "duration",
             "title",
             "artist",
+            "channel",
             "thumbnail_url",
             "source",
+            "id",
+            "video_id",
+            "song_id",
+            "playlist_id",
+            "url",
             "auto_next_enabled",
             "repeat_enabled",
+            "shuffle_enabled",
         ):
             if key in payload:
                 merged[key] = payload.get(key)
@@ -497,7 +534,45 @@ class PhicommR1ApiClient:
         if playing_hint is not None:
             merged["is_playing"] = playing_hint
 
+        # Drop stale identity fields that no longer match the active source.
+        source_text = str(merged.get("source", "") or "").strip().lower()
+        if "zing" in source_text:
+            merged.pop("video_id", None)
+        elif source_text:
+            merged.pop("song_id", None)
+
+        # Hard stop frames often omit metadata. Clear old track details so the
+        # frontend doesn't keep showing the previous song after playback ends.
+        try:
+            position_value = float(merged.get("position") or 0)
+        except (TypeError, ValueError):
+            position_value = 0.0
+        try:
+            duration_value = float(merged.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration_value = 0.0
+        hard_stopped = (
+            playing_hint is False
+            and position_value <= 0
+            and duration_value <= 0
+        )
+        if hard_stopped:
+            for key in (
+                "title",
+                "artist",
+                "channel",
+                "thumbnail_url",
+                "source",
+                "id",
+                "video_id",
+                "song_id",
+                "playlist_id",
+                "url",
+            ):
+                merged.pop(key, None)
+
         merged["type"] = kind or payload.get("type") or "playback_state"
+        merged["updated_at_ms"] = int(time.time() * 1000)
         self._last_aibox_playback = merged
 
     @staticmethod
@@ -1415,7 +1490,13 @@ class PhicommR1ApiClient:
         _LOGGER.debug("Playlist search fallback after retries: %s", last_err)
         with suppress(PhicommR1ApiConnectionError):
             await self._aibox_chi_gui(request)
-        return {"success": False, "type": "playlist_result", "songs": []}
+        return {
+            "success": False,
+            "type": "playlist_result",
+            "songs": [],
+            "playlists": [],
+            "results": [],
+        }
 
     async def async_search_zing(self, query: str) -> dict[str, Any]:
         """Search songs on Zing MP3 via AiboxPlus WS API."""
@@ -1469,6 +1550,187 @@ class PhicommR1ApiClient:
             },
             "playback_state",
         )
+
+    async def async_playlist_list(self) -> dict[str, Any]:
+        """Fetch playlist library from AiboxPlus."""
+        request = {"action": "playlist_list"}
+        try:
+            return await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_list_result"},
+                timeout=8.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            return {"type": "playlist_list_result", "success": False, "playlists": []}
+
+    async def async_playlist_create(self, name: str) -> dict[str, Any]:
+        """Create a playlist in AiboxPlus."""
+        normalized_name = self._dam_bao_khong_rong(name, "name")
+        request = {"action": "playlist_create", "name": normalized_name}
+        try:
+            return await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_created", "playlist_create_result"},
+                timeout=8.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            return {
+                "type": "playlist_created",
+                "success": True,
+                "playlist": {"name": normalized_name},
+                "unverified": True,
+            }
+
+    async def async_playlist_delete(self, playlist_id: str | int) -> dict[str, Any]:
+        """Delete a playlist by id."""
+        normalized_playlist_id = self._dam_bao_khong_rong(str(playlist_id), "playlist_id")
+        request = {"action": "playlist_delete", "playlist_id": normalized_playlist_id}
+        try:
+            return await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_deleted", "playlist_delete_result"},
+                timeout=8.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            return {
+                "type": "playlist_deleted",
+                "success": True,
+                "playlist_id": normalized_playlist_id,
+                "unverified": True,
+            }
+
+    async def async_playlist_get_songs(self, playlist_id: str | int) -> dict[str, Any]:
+        """Fetch songs in one playlist."""
+        normalized_playlist_id = self._dam_bao_khong_rong(str(playlist_id), "playlist_id")
+        request = {"action": "playlist_get_songs", "playlist_id": normalized_playlist_id}
+        try:
+            return await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_songs_result", "playlist_get_songs_result"},
+                timeout=10.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            return {
+                "type": "playlist_songs_result",
+                "success": False,
+                "playlist_id": normalized_playlist_id,
+                "songs": [],
+            }
+
+    async def async_playlist_add_song(
+        self,
+        playlist_id: str | int,
+        *,
+        source: str,
+        item_id: str,
+        title: str = "",
+        artist: str = "",
+        thumbnail_url: str = "",
+        duration_seconds: int = 0,
+    ) -> dict[str, Any]:
+        """Add one track into a playlist."""
+        normalized_playlist_id = self._dam_bao_khong_rong(str(playlist_id), "playlist_id")
+        normalized_item_id = self._dam_bao_khong_rong(item_id, "id")
+        source_text = str(source or "").strip().lower()
+        normalized_source = "zing" if "zing" in source_text else "youtube"
+        request = {
+            "action": "playlist_add_song",
+            "playlist_id": normalized_playlist_id,
+            "source": normalized_source,
+            "id": normalized_item_id,
+            "title": str(title or "").strip(),
+            "artist": str(artist or "").strip(),
+            "thumbnail_url": str(thumbnail_url or "").strip(),
+            "duration_seconds": int(duration_seconds or 0),
+        }
+        try:
+            return await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_song_added", "playlist_add_song_result"},
+                timeout=8.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            return {
+                "type": "playlist_song_added",
+                "success": True,
+                "playlist_id": normalized_playlist_id,
+                "id": normalized_item_id,
+                "unverified": True,
+            }
+
+    async def async_playlist_remove_song(
+        self,
+        playlist_id: str | int,
+        *,
+        song_index: int,
+    ) -> dict[str, Any]:
+        """Remove one track from a playlist by zero-based index."""
+        normalized_playlist_id = self._dam_bao_khong_rong(str(playlist_id), "playlist_id")
+        request = {
+            "action": "playlist_remove_song",
+            "playlist_id": normalized_playlist_id,
+            "song_index": int(song_index),
+        }
+        try:
+            return await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_song_removed", "playlist_remove_song_result"},
+                timeout=8.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            return {
+                "type": "playlist_song_removed",
+                "success": True,
+                "playlist_id": normalized_playlist_id,
+                "song_index": int(song_index),
+                "unverified": True,
+            }
+
+    async def async_playlist_play(self, playlist_id: str | int) -> dict[str, Any]:
+        """Play a playlist by id."""
+        normalized_playlist_id = self._dam_bao_khong_rong(str(playlist_id), "playlist_id")
+        request = {"action": "playlist_play", "playlist_id": normalized_playlist_id}
+        try:
+            response = await self._aibox_gui_va_cho(
+                request,
+                expect_type={"playlist_play_started", "playlist_play_result", "playback_state"},
+                timeout=10.0,
+            )
+        except PhicommR1ApiConnectionError:
+            with suppress(PhicommR1ApiConnectionError):
+                await self._aibox_chi_gui(request)
+            response = {
+                "type": "playlist_play_started",
+                "success": True,
+                "playlist_id": normalized_playlist_id,
+                "unverified": True,
+            }
+        optimistic = {
+            "is_playing": True,
+            "play_state": 1,
+            "state": "playing",
+            "position": 0,
+            "source": "youtube_playlist",
+            "playlist_id": normalized_playlist_id,
+            "type": "playback_state",
+        }
+        playlist_name = response.get("playlist_name") or response.get("name")
+        if playlist_name:
+            optimistic["title"] = playlist_name
+        self._aibox_cap_nhat_bo_nho_phat(optimistic, "playback_state")
+        return response
 
     async def async_aibox_media_action(self, action: str) -> None:
         """Control AiboxPlus playback channel (YouTube/Zing)."""

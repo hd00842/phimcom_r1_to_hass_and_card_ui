@@ -27,8 +27,21 @@ Gợi ý chọn giao thức:
 - `auto`: nên dùng cho lần cài đầu tiên
 - `ws_native`: dùng khi muốn ưu tiên kết nối native
 - `http_bridge`: chỉ dùng nếu bạn biết chắc mình đang dùng bridge cũ
+## 3. Coppy www/phicomm_r1
+**Download file phicomm-r1-card.js và coppy vào www/phicomm_r1**
+Sau đó vào **Settings ->Dashboards->Resources->Add resource
+- Url nhập: /local/phicomm_r1/phicomm-r1-card.js
+- Resource type -> JavaScript module -> Save
+## 4 Tạo card trên lovelace
+Sử dụng code sau:
+```yaml
+    type: custom:phicomm-r1-card
+    entity: media_player.phimcomm_r1
+    title: Phicomm R1
 
-Lưu ý về cổng:
-
-- `8080`: dùng cho `ws_native` hoặc `auto`
-- `2847`: chỉ dùng khi bạn biết chắc mình đang dùng `http_bridge`
+Có thể sử dụng thêm option max_height: 90vh hoặc max_height: 500px để giới hạn chiều cao của card ví dụ
+```yaml
+    type: custom:phicomm-r1-card
+    entity: media_player.phimcomm_r1
+    title: Phicomm R1
+    max_height: 500px

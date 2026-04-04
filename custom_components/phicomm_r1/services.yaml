@@ -152,6 +152,136 @@ play_zing:
       selector:
         text:
 
+playlist_list:
+  name: Get playlist library
+  description: Load the current AiboxPlus playlist library.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+playlist_create:
+  name: Create playlist
+  description: Create a new AiboxPlus playlist.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    name:
+      required: true
+      example: Nhac buoi sang
+      selector:
+        text:
+
+playlist_delete:
+  name: Delete playlist
+  description: Delete one AiboxPlus playlist by id.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+
+playlist_get_songs:
+  name: Get playlist songs
+  description: Load songs from one AiboxPlus playlist.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+
+playlist_add_song:
+  name: Add song to playlist
+  description: Add one YouTube or Zing track into an AiboxPlus playlist.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+    source:
+      required: true
+      example: youtube
+      selector:
+        text:
+    id:
+      required: true
+      example: dQw4w9WgXcQ
+      selector:
+        text:
+    title:
+      example: Noi nay co anh
+      selector:
+        text:
+    artist:
+      example: Son Tung M-TP Official
+      selector:
+        text:
+    thumbnail_url:
+      example: https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg
+      selector:
+        text:
+    duration_seconds:
+      example: 279
+      selector:
+        number:
+          mode: box
+
+playlist_remove_song:
+  name: Remove song from playlist
+  description: Remove one song from an AiboxPlus playlist by zero-based song index.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+    song_index:
+      required: true
+      example: 0
+      selector:
+        number:
+          mode: box
+
+playlist_play:
+  name: Play playlist
+  description: Start playback for one AiboxPlus playlist by id.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+
 wake_word_set_enabled:
   name: Wake word set enabled
   description: Enable or disable wake word detection.

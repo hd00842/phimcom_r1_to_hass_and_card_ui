@@ -20,6 +20,7 @@ const CHAT_DISABLED_STATES = new Set([
   "disconnected",
 ]);
 const CHAT_SESSION_STATES = new Set(["connecting", "listening", "thinking", "speaking"]);
+const NOW_PLAYING_FALLBACK_WINDOW_MS = 8000;
 
 class PhicommR1Card extends HTMLElement {
   constructor() {
@@ -71,7 +72,14 @@ class PhicommR1Card extends HTMLElement {
 
     this._lastEntityRef = null;
     this._lastSearchStateKey = "";
+    this._lastPlaylistLibraryKey = "";
+    this._lastPlaylistDetailKey = "";
+    this._lastPlaylistEventKey = "";
     this._pendingRender = false;
+    this._playlistLibraryLoading = false;
+    this._playlistDetailLoading = false;
+    this._playlistDetailVisibleId = "";
+    this._playlistDialog = this._taoTrangThaiDialogPlaylist();
 
     this._progressTimerId = null;
     this._liveTrackKey = "";
@@ -79,14 +87,7 @@ class PhicommR1Card extends HTMLElement {
     this._liveDurationSeconds = 0;
     this._livePlaying = false;
     this._liveTickAt = 0;
-    this._nowPlayingCache = {
-      trackKey: "",
-      title: "",
-      artist: "",
-      source: "",
-      thumbnail_url: "",
-      duration: 0,
-    };
+    this._nowPlayingCache = this._taoNowPlayingCache();
     this._forcePauseUntil = 0;
     this._optimisticPlayUntil = 0;
     this._pendingSwitches = {};
@@ -138,14 +139,7 @@ class PhicommR1Card extends HTMLElement {
     this._liveDurationSeconds = 0;
     this._livePlaying = false;
     this._liveTickAt = 0;
-    this._nowPlayingCache = {
-      trackKey: "",
-      title: "",
-      artist: "",
-      source: "",
-      thumbnail_url: "",
-      duration: 0,
-    };
+    this._nowPlayingCache = this._taoNowPlayingCache();
     this._forcePauseUntil = 0;
     this._optimisticPlayUntil = 0;
     this._pendingSwitches = {};
@@ -165,8 +159,15 @@ class PhicommR1Card extends HTMLElement {
     this._eqLevel = 0;
     this._eqSyncGuardUntil = 0;
     this._lastSearchStateKey = "";
+    this._lastPlaylistLibraryKey = "";
+    this._lastPlaylistDetailKey = "";
+    this._lastPlaylistEventKey = "";
     this._dangChoKetQuaTimKiem = false;
     this._timKiemDangCho = null;
+    this._playlistLibraryLoading = false;
+    this._playlistDetailLoading = false;
+    this._playlistDetailVisibleId = "";
+    this._playlistDialog = this._taoTrangThaiDialogPlaylist();
     this._veGiaoDien();
   }
 
@@ -180,11 +181,36 @@ class PhicommR1Card extends HTMLElement {
       entityRef?.attributes?.last_music_search || {}
     );
     const searchChanged = currentSearchStateKey !== this._lastSearchStateKey;
+    const currentPlaylistLibraryKey = this._khoaTrangThaiPayload(
+      entityRef?.attributes?.playlist_library || {}
+    );
+    const playlistLibraryChanged =
+      currentPlaylistLibraryKey !== this._lastPlaylistLibraryKey;
+    const currentPlaylistDetailKey = this._khoaTrangThaiPayload(
+      entityRef?.attributes?.playlist_detail || {}
+    );
+    const playlistDetailChanged =
+      currentPlaylistDetailKey !== this._lastPlaylistDetailKey;
+    const currentPlaylistEventKey = this._khoaTrangThaiPayload(
+      entityRef?.attributes?.last_playlist_event || {}
+    );
+    const playlistEventChanged =
+      currentPlaylistEventKey !== this._lastPlaylistEventKey;
     this._lastEntityRef = entityRef;
     this._lastSearchStateKey = currentSearchStateKey;
+    this._lastPlaylistLibraryKey = currentPlaylistLibraryKey;
+    this._lastPlaylistDetailKey = currentPlaylistDetailKey;
+    this._lastPlaylistEventKey = currentPlaylistEventKey;
     this._dongBoTuEntity();
 
-    if (!changed && !searchChanged && !this._pendingRender) return;
+    if (
+      !changed &&
+      !searchChanged &&
+      !playlistLibraryChanged &&
+      !playlistDetailChanged &&
+      !playlistEventChanged &&
+      !this._pendingRender
+    ) return;
     if (this._activeTab === "system" && this._dangTuongTacEq()) {
       this._pendingRender = true;
       this._capNhatEqGiaoDien(this.shadowRoot);
@@ -248,6 +274,162 @@ class PhicommR1Card extends HTMLElement {
 
   _thuocTinh() {
     return this._doiTuongTrangThai()?.attributes || {};
+  }
+
+  _taoTrangThaiDialogPlaylist() {
+    return {
+      open: false,
+      mode: "",
+      selectedPlaylistId: "",
+      newPlaylistName: "",
+      pendingItem: null,
+      pendingSource: "",
+      busy: false,
+      error: "",
+    };
+  }
+
+  _taoNowPlayingCache() {
+    return {
+      trackKey: "",
+      trackId: "",
+      playlistId: "",
+      title: "",
+      artist: "",
+      source: "",
+      thumbnail_url: "",
+      duration: 0,
+    };
+  }
+
+  _mocCapNhatPayload(payload) {
+    const raw =
+      payload?.updated_at_ms ??
+      payload?.updatedAtMs ??
+      payload?.updated_at ??
+      payload?.updatedAt;
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric : 0;
+  }
+
+  _khoaTrangThaiPayload(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return `${this._mocCapNhatPayload(payload)}|${JSON.stringify(payload)}`;
+  }
+
+  _laTabQuanLyPlaylist(tab = this._mediaSearchTab) {
+    return String(tab || "").trim().toLowerCase() === "playlists";
+  }
+
+  _duLieuTimKiemTheoTab() {
+    if (this._laTabQuanLyPlaylist()) {
+      return {
+        source: "",
+        query: "",
+        success: false,
+        total: 0,
+        items: [],
+      };
+    }
+    const search = this._thuocTinh().last_music_search || {};
+    const expectedSource = this._nguonKetQuaTheoTab(this._mediaSearchTab);
+    const searchSource = String(search.source || "").trim().toLowerCase();
+    const expectedSourceNorm = String(expectedSource || "").trim().toLowerCase();
+    if (!expectedSourceNorm || searchSource !== expectedSourceNorm) {
+      return {
+        ...search,
+        source: expectedSource,
+        items: [],
+      };
+    }
+    return {
+      ...search,
+      items: Array.isArray(search.items) ? search.items : [],
+    };
+  }
+
+  _thuVienPlaylist() {
+    const library = this._thuocTinh().playlist_library || {};
+    return Array.isArray(library.playlists) ? library.playlists : [];
+  }
+
+  _chiTietPlaylistDangXem() {
+    const detail = this._thuocTinh().playlist_detail || {};
+    const detailId = String(detail.playlist_id || "").trim();
+    if (!detailId || (this._playlistDetailVisibleId && detailId !== this._playlistDetailVisibleId)) {
+      return null;
+    }
+    return {
+      ...detail,
+      items: Array.isArray(detail.items) ? detail.items : [],
+    };
+  }
+
+  _placeholderTimKiemMedia() {
+    if (this._mediaSearchTab === "playlist") return "Tìm playlist...";
+    if (this._mediaSearchTab === "zing") return "Tìm bài hát Zing MP3...";
+    return "Tìm bài hát...";
+  }
+
+  _chuanHoaTenPlaylist(value) {
+    return String(value || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  }
+
+  _timPlaylistTheoTen(name) {
+    const normalizedName = this._chuanHoaTenPlaylist(name);
+    if (!normalizedName) return [];
+    return this._thuVienPlaylist().filter((playlist) => {
+      return this._chuanHoaTenPlaylist(playlist?.name) === normalizedName;
+    });
+  }
+
+  _laMucPlaylist(item, fallbackSource = "") {
+    if (!item || typeof item !== "object") return false;
+    const kind = String(item.kind || "").trim().toLowerCase();
+    const source = String(item.source || fallbackSource || "").trim().toLowerCase();
+    return kind === "playlist" || Boolean(item.playlist_id || item.playlistId) || source.includes("playlist");
+  }
+
+  _coTheThemPlaylist(item, fallbackSource = "") {
+    if (!item || typeof item !== "object") return false;
+    if (this._laMucPlaylist(item, fallbackSource)) return false;
+    return Boolean(
+      this._chuoiKhongRongDauTien(
+        item.song_id,
+        item.songId,
+        item.video_id,
+        item.videoId,
+        item.id
+      )
+    );
+  }
+
+  _nguonTrackChoPlaylist(item, fallbackSource = "") {
+    const itemSource = String(item?.source || fallbackSource || "").trim().toLowerCase();
+    if (item?.song_id || item?.songId || itemSource.includes("zing")) return "zing";
+    return "youtube";
+  }
+
+  _duLieuThemPlaylist(item, fallbackSource = "") {
+    if (!this._coTheThemPlaylist(item, fallbackSource)) return null;
+    const source = this._nguonTrackChoPlaylist(item, fallbackSource);
+    const id =
+      source === "zing"
+        ? this._chuoiKhongRongDauTien(item?.song_id, item?.songId, item?.id)
+        : this._chuoiKhongRongDauTien(item?.video_id, item?.videoId, item?.id);
+    if (!id) return null;
+    return {
+      playlist_id: "",
+      source,
+      id,
+      title: item?.title || item?.name || "",
+      artist: item?.artist || item?.channel || "",
+      thumbnail_url: item?.thumbnail_url || "",
+      duration_seconds: Number(item?.duration_seconds || 0),
+    };
   }
 
   _dangFocusTimKiem() {
@@ -372,7 +554,7 @@ class PhicommR1Card extends HTMLElement {
   _nhanNguon(source) {
     const normalized = String(source || "").toLowerCase();
     if (normalized.includes("zing")) return "ZING MP3";
-    if (normalized.includes("playlist")) return "DANH SACH PHAT";
+    if (normalized.includes("playlist")) return "PLAYLIST";
     if (normalized.includes("youtube")) return "YOUTUBE";
     return normalized ? normalized.toUpperCase() : "AI BOX";
   }
@@ -403,19 +585,29 @@ class PhicommR1Card extends HTMLElement {
   }
 
   _layIdMucMedia(item) {
-    if (!item || typeof item !== "object") return "";
-    const resolved =
-      item.id ||
-      item.video_id ||
-      item.videoId ||
-      item.song_id ||
-      item.songId ||
-      item.track_id ||
-      item.trackId ||
-      item.playlist_id ||
-      item.playlistId ||
-      "";
-    return String(resolved || "").trim();
+    return this._layDanhSachIdMucMedia(item)[0] || "";
+  }
+
+  _layDanhSachIdMucMedia(item) {
+    if (!item || typeof item !== "object") return [];
+    const seen = new Set();
+    return [
+      item.id,
+      item.video_id,
+      item.videoId,
+      item.song_id,
+      item.songId,
+      item.track_id,
+      item.trackId,
+      item.playlist_id,
+      item.playlistId,
+    ].reduce((ids, value) => {
+      const text = String(value || "").trim();
+      if (!text || seen.has(text)) return ids;
+      seen.add(text);
+      ids.push(text);
+      return ids;
+    }, []);
   }
 
   _epKieuBoolean(value, fallback = false) {
@@ -953,6 +1145,249 @@ class PhicommR1Card extends HTMLElement {
     }
   }
 
+  async _choSuKienPlaylistMoi(previousKey, predicate, timeoutMs = 6000) {
+    if (!this._hass || !this._config) return null;
+    const startedAt = Date.now();
+    let lastRefreshAt = 0;
+    while (Date.now() - startedAt < timeoutMs) {
+      const event = this._thuocTinh().last_playlist_event || {};
+      const currentKey = this._khoaTrangThaiPayload(event);
+      if (currentKey && currentKey !== previousKey && predicate(event)) {
+        return event;
+      }
+      const elapsed = Date.now() - startedAt;
+      if (elapsed - lastRefreshAt >= 1200) {
+        lastRefreshAt = elapsed;
+        try {
+          await this._hass.callService("homeassistant", "update_entity", {
+            entity_id: this._config.entity,
+          });
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return null;
+  }
+
+  async _taiThuVienPlaylist(reRender = true) {
+    const previousKey = this._khoaTrangThaiPayload(this._thuocTinh().playlist_library || {});
+    this._playlistLibraryLoading = true;
+    if (reRender) this._veGiaoDien();
+    try {
+      await this._goiDichVu("media_player", "playlist_list");
+      await this._choPayloadPlaylistMoi(
+        previousKey,
+        () => this._thuocTinh().playlist_library || {},
+        4500
+      );
+    } finally {
+      this._playlistLibraryLoading = false;
+      if (reRender) this._veGiaoDien();
+    }
+  }
+
+  async _taiChiTietPlaylist(playlistId, reRender = true) {
+    const normalizedPlaylistId = String(playlistId || "").trim();
+    if (!normalizedPlaylistId) return;
+    this._playlistDetailVisibleId = normalizedPlaylistId;
+    this._playlistDetailLoading = true;
+    if (reRender) this._veGiaoDien();
+    try {
+      await this._goiDichVu("media_player", "playlist_get_songs", {
+        playlist_id: normalizedPlaylistId,
+      });
+    } finally {
+      this._playlistDetailLoading = false;
+      if (reRender) this._veGiaoDien();
+    }
+  }
+
+  _moDialogPlaylist(mode, pendingItem = null, pendingSource = "") {
+    this._playlistDialog = {
+      open: true,
+      mode,
+      selectedPlaylistId: "",
+      newPlaylistName: "",
+      pendingItem: pendingItem ? { ...pendingItem } : null,
+      pendingSource,
+      busy: false,
+      error: "",
+    };
+    this._veGiaoDien();
+  }
+
+  _dongDialogPlaylist() {
+    this._playlistDialog = this._taoTrangThaiDialogPlaylist();
+    this._veGiaoDien();
+  }
+
+  async _choPayloadPlaylistMoi(previousKey, payloadFactory, timeoutMs = 4500) {
+    if (!this._hass || !this._config) return null;
+    const startedAt = Date.now();
+    let lastRefreshAt = 0;
+    while (Date.now() - startedAt < timeoutMs) {
+      const payload = payloadFactory();
+      const currentKey = this._khoaTrangThaiPayload(payload);
+      if (currentKey && currentKey !== previousKey) {
+        return payload;
+      }
+      const elapsed = Date.now() - startedAt;
+      if (elapsed - lastRefreshAt >= 1200) {
+        lastRefreshAt = elapsed;
+        try {
+          await this._hass.callService("homeassistant", "update_entity", {
+            entity_id: this._config.entity,
+          });
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return payloadFactory();
+  }
+
+  async _moDialogThemPlaylist(item, source) {
+    try {
+      await this._taiThuVienPlaylist(false);
+    } catch (_) {
+      /* keep the dialog usable with the latest local library snapshot */
+    }
+    this._moDialogPlaylist("add", item, source);
+  }
+
+  _moDialogTaoPlaylist() {
+    this._moDialogPlaylist("create");
+  }
+
+  async _themTrackVaoPlaylist(playlistId, trackPayload) {
+    const previousKey = this._khoaTrangThaiPayload(this._thuocTinh().last_playlist_event || {});
+    await this._goiDichVu("media_player", "playlist_add_song", {
+      playlist_id: playlistId,
+      source: trackPayload.source,
+      id: trackPayload.id,
+      title: trackPayload.title,
+      artist: trackPayload.artist,
+      thumbnail_url: trackPayload.thumbnail_url,
+      duration_seconds: trackPayload.duration_seconds,
+    });
+    const event = await this._choSuKienPlaylistMoi(
+      previousKey,
+      (payload) => {
+        const type = String(payload?.type || "").toLowerCase();
+        return type.includes("playlist_song_added");
+      },
+      6000
+    );
+    if (!event) {
+      throw new Error("Không nhận được xác nhận thêm bài vào playlist");
+    }
+    return event;
+  }
+
+  async _taoPlaylistTuDialog(name, requirePlaylistId = false) {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) {
+      throw new Error("Vui lòng nhập tên playlist");
+    }
+    const previousKey = this._khoaTrangThaiPayload(this._thuocTinh().last_playlist_event || {});
+    await this._goiDichVu("media_player", "playlist_create", { name: normalizedName });
+    const event = await this._choSuKienPlaylistMoi(
+      previousKey,
+      (payload) => {
+        const type = String(payload?.type || "").toLowerCase();
+        return type.includes("playlist_created");
+      },
+      6000
+    );
+    if (!event) {
+      throw new Error("Không nhận được xác nhận tạo playlist");
+    }
+    const playlistId = String(event?.playlist_id || "").trim();
+    if (playlistId || !requirePlaylistId) {
+      return event;
+    }
+
+    await this._taiThuVienPlaylist(false);
+    const matchedPlaylists = this._timPlaylistTheoTen(normalizedName);
+    if (matchedPlaylists.length === 1 && matchedPlaylists[0]?.id) {
+      return {
+        ...event,
+        playlist_id: String(matchedPlaylists[0].id).trim(),
+        playlist_name: matchedPlaylists[0].name || normalizedName,
+      };
+    }
+    if (matchedPlaylists.length > 1) {
+      const error = new Error(
+        "Đã tạo playlist nhưng có nhiều playlist trùng tên. Vui lòng chọn thủ công trong danh sách."
+      );
+      error.manualSelectionRequired = true;
+      throw error;
+    }
+    const error = new Error(
+      "Đã tạo playlist nhưng chưa xác định được playlist mới. Vui lòng chọn thủ công trong danh sách."
+    );
+    error.manualSelectionRequired = true;
+    throw error;
+  }
+
+  async _xacNhanDialogPlaylist() {
+    const dialog = this._playlistDialog;
+    if (!dialog.open || dialog.busy) return;
+
+    const selectedPlaylistId = String(dialog.selectedPlaylistId || "").trim();
+    const newPlaylistName = String(dialog.newPlaylistName || "").trim();
+    const nextDialog = { ...dialog, busy: true, error: "" };
+    this._playlistDialog = nextDialog;
+    this._veGiaoDien();
+
+    try {
+      if (dialog.mode === "create") {
+        await this._taoPlaylistTuDialog(newPlaylistName, false);
+        await this._taiThuVienPlaylist(false);
+        this._playlistDialog = this._taoTrangThaiDialogPlaylist();
+        this._veGiaoDien();
+        return;
+      }
+
+      const trackPayload = this._duLieuThemPlaylist(dialog.pendingItem, dialog.pendingSource);
+      if (!trackPayload) {
+        throw new Error("Không có bài hát hợp lệ để thêm vào playlist");
+      }
+
+      let playlistId = selectedPlaylistId;
+      if (newPlaylistName) {
+        const createdEvent = await this._taoPlaylistTuDialog(newPlaylistName, true);
+        playlistId = String(createdEvent.playlist_id || "").trim();
+      }
+      if (!playlistId) {
+        throw new Error("Vui lòng chọn playlist hoặc nhập tên playlist mới");
+      }
+
+      await this._themTrackVaoPlaylist(playlistId, trackPayload);
+      await this._taiThuVienPlaylist(false);
+      if (this._playlistDetailVisibleId === playlistId) {
+        await this._taiChiTietPlaylist(playlistId, false);
+      }
+      this._playlistDialog = this._taoTrangThaiDialogPlaylist();
+      this._veGiaoDien();
+    } catch (err) {
+      const manualSelectionRequired =
+        Boolean(err) &&
+        typeof err === "object" &&
+        Boolean(err.manualSelectionRequired);
+      this._playlistDialog = {
+        ...nextDialog,
+        busy: false,
+        newPlaylistName: manualSelectionRequired ? "" : nextDialog.newPlaylistName,
+        error: err instanceof Error ? err.message : "Không thể xử lý playlist",
+      };
+      this._veGiaoDien();
+    }
+  }
+
   _laPhatDangHoatDong(value) {
     if (value === true || value === 1 || value === 3) return true;
     if (typeof value === "number" && value > 0) {
@@ -992,6 +1427,30 @@ class PhicommR1Card extends HTMLElement {
       );
     }
     return false;
+  }
+
+  _chuanHoaTrangThaiPhatGiaTri(value) {
+    if (value === true || value === 1 || value === 3) return "playing";
+    if (value === false) return "paused";
+    if (typeof value === "number") {
+      if (value === 0 || value === 2) return "paused";
+      return "";
+    }
+    if (typeof value !== "string") return "";
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return "";
+    if (["true", "1", "3", "playing", "play", "on"].includes(normalized)) return "playing";
+    if (["paused", "pause"].includes(normalized)) return "paused";
+    if (["false", "0", "2", "stopped", "stop", "idle", "off"].includes(normalized)) return "idle";
+    return "";
+  }
+
+  _giaiMaTrangThaiPhat(...values) {
+    for (const value of values) {
+      const resolved = this._chuanHoaTrangThaiPhatGiaTri(value);
+      if (resolved) return resolved;
+    }
+    return "";
   }
 
   _xoaHenGioTienDo() {
@@ -1114,105 +1573,139 @@ class PhicommR1Card extends HTMLElement {
     const aibox = attrs.aibox_playback || {};
     const items = Array.isArray(search.items) ? search.items : [];
     const stateObj = this._doiTuongTrangThai();
-    const aiboxTrackId = this._chuoiKhongRongDauTien(
-      aibox.id,
-      aibox.video_id,
-      aibox.song_id,
-      aibox.track_id
+    const playUpdatedAtMs = this._mocCapNhatPayload(play);
+    const playIsFresh =
+      playUpdatedAtMs > 0 && Date.now() - playUpdatedAtMs <= NOW_PLAYING_FALLBACK_WINDOW_MS;
+    const entityPlaybackState = this._giaiMaTrangThaiPhat(
+      attrs.playback_state_raw,
+      stateObj?.state
     );
-    const playId = this._chuoiKhongRongDauTien(
-      play.id,
-      play.video_id,
-      play.song_id,
-      play.track_id,
-      aiboxTrackId
+    const aiboxPlaybackState = this._giaiMaTrangThaiPhat(
+      aibox.state,
+      aibox.play_state,
+      aibox.is_playing
     );
-
-    let byId = items.find((item) => {
-      const itemId = this._layIdMucMedia(item);
-      return itemId && (itemId === playId || itemId === aiboxTrackId);
-    });
-
-    if (!byId && !playId) {
-      const isLikelyPlaying =
-        String(stateObj?.state || "").toLowerCase() === "playing" ||
-        this._laPhatDangHoatDong(aibox.is_playing) ||
-        this._laPhatDangHoatDong(aibox.play_state) ||
-        this._laPhatDangHoatDong(aibox.state) ||
-        String(aibox.state || "").toLowerCase() === "playing";
-      if (isLikelyPlaying && items.length > 0) {
-        byId = items[0];
-      }
-    }
+    const hasExplicitStop = aiboxPlaybackState === "idle" || entityPlaybackState === "idle";
+    const candidateIds = Array.from(
+      new Set(
+        [
+          aibox.id,
+          aibox.video_id,
+          aibox.song_id,
+          aibox.track_id,
+          aibox.playlist_id,
+          playIsFresh ? play.id : "",
+          playIsFresh ? play.video_id : "",
+          playIsFresh ? play.song_id : "",
+          playIsFresh ? play.track_id : "",
+          playIsFresh ? play.playlist_id : "",
+        ]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    );
+    const matchedItem = hasExplicitStop
+      ? null
+      : items.find((item) =>
+          this._layDanhSachIdMucMedia(item).some((itemId) => candidateIds.includes(itemId))
+        ) || null;
+    const playFallback = !hasExplicitStop && playIsFresh ? play : {};
 
     const rawTitle = this._chuoiKhongRongDauTien(
       aibox.title,
       attrs.media_title,
-      byId?.title,
-      play.title
+      matchedItem?.title,
+      playFallback.title
     );
     let title = this._laTieuDeNghi(rawTitle) ? "" : rawTitle;
     let artist = this._chuoiKhongRongDauTien(
       aibox.artist,
       aibox.channel,
       attrs.media_artist,
-      byId?.artist,
-      byId?.channel,
-      play.artist
+      matchedItem?.artist,
+      matchedItem?.channel,
+      playFallback.artist
     );
     let duration = this._epKieuGiayPhat(
-      aibox.duration ?? attrs.media_duration ?? byId?.duration_seconds,
+      aibox.duration ??
+        attrs.media_duration ??
+        matchedItem?.duration_seconds ??
+        playFallback.duration_seconds ??
+        playFallback.duration,
       0
     );
-    let position = this._epKieuGiayPhat(aibox.position ?? attrs.media_position, 0);
+    let position = this._epKieuGiayPhat(
+      aibox.position ?? attrs.media_position ?? playFallback.position,
+      0
+    );
     if (duration > 0 && position > duration) {
       position = duration;
     }
-    let source = this._chuoiKhongRongDauTien(aibox.source, play.source, search.source);
+    let source = this._chuoiKhongRongDauTien(
+      aibox.source,
+      playFallback.source,
+      matchedItem?.source
+    );
     let thumbnailUrl = this._chuoiKhongRongDauTien(
       aibox.thumbnail_url,
       attrs.entity_picture,
-      byId?.thumbnail_url,
-      items.find((item) => item && item.thumbnail_url)?.thumbnail_url
+      matchedItem?.thumbnail_url,
+      playFallback.thumbnail_url
     );
-
-    const aiboxPlaying =
-      this._laPhatDangHoatDong(aibox.is_playing) ||
-      this._laPhatDangHoatDong(aibox.play_state) ||
-      this._laPhatDangHoatDong(aibox.state);
-    const aiboxPaused =
-      this._laPhatKhongHoatDong(aibox.is_playing) ||
-      this._laPhatKhongHoatDong(aibox.play_state) ||
-      this._laPhatKhongHoatDong(aibox.state);
+    const aiboxTrackId = this._chuoiKhongRongDauTien(
+      aibox.video_id,
+      aibox.song_id,
+      aibox.id,
+      aibox.track_id
+    );
+    const playlistId = this._chuoiKhongRongDauTien(
+      aibox.playlist_id,
+      playFallback.playlist_id,
+      matchedItem?.playlist_id
+    );
+    const trackId = this._chuoiKhongRongDauTien(
+      aiboxTrackId,
+      playFallback.video_id,
+      playFallback.song_id,
+      playFallback.id,
+      this._layIdMucMedia(matchedItem)
+    );
+    const aiboxPlaying = aiboxPlaybackState === "playing";
+    const aiboxPaused = aiboxPlaybackState === "paused";
 
     const rawTrackKey = this._chuoiKhongRongDauTien(
-      playId,
-      aiboxTrackId,
+      trackId ? `track:${trackId}` : "",
+      playlistId && title ? `playlist:${playlistId}|${title}` : "",
       source && title ? `${source}|${title}|${artist}|${duration}` : ""
     );
     const hardStopRaw =
-      !aiboxPlaying &&
-      !aiboxPaused &&
-      !title &&
-      !playId &&
-      !aiboxTrackId &&
       position <= 0 &&
-      duration <= 0;
+      duration <= 0 &&
+      (hasExplicitStop ||
+        (!aiboxPlaybackState &&
+          !entityPlaybackState &&
+          !title &&
+          !trackId &&
+          !playlistId &&
+          !this._chuoiKhongRongDauTien(
+            aibox.title,
+            aibox.artist,
+            aibox.channel,
+            aibox.id,
+            aibox.video_id,
+            aibox.song_id,
+            aibox.playlist_id
+          )));
 
     if (hardStopRaw) {
-      this._nowPlayingCache = {
-        trackKey: "",
-        title: "",
-        artist: "",
-        source: "",
-        thumbnail_url: "",
-        duration: 0,
-      };
+      this._nowPlayingCache = this._taoNowPlayingCache();
     } else {
       const hasFreshTrack = Boolean(rawTrackKey) && Boolean(title);
       if (hasFreshTrack) {
         this._nowPlayingCache = {
           trackKey: rawTrackKey,
+          trackId,
+          playlistId,
           title,
           artist,
           source,
@@ -1221,13 +1714,19 @@ class PhicommR1Card extends HTMLElement {
         };
       } else {
         const cached = this._nowPlayingCache;
-        const canUseCache =
+        const cacheCompatible =
           Boolean(cached.trackKey) &&
+          (!trackId || !cached.trackId || trackId === cached.trackId) &&
+          (!playlistId || !cached.playlistId || playlistId === cached.playlistId);
+        const canUseCache =
+          cacheCompatible &&
           (aiboxPlaying ||
             aiboxPaused ||
+            entityPlaybackState === "playing" ||
+            entityPlaybackState === "paused" ||
             position > 0 ||
             duration > 0 ||
-            Boolean(this._chuoiKhongRongDauTien(source, playId, aiboxTrackId)));
+            Boolean(this._chuoiKhongRongDauTien(source, trackId, playlistId)));
         if (canUseCache) {
           title = title || cached.title;
           artist = artist || cached.artist;
@@ -1257,69 +1756,62 @@ class PhicommR1Card extends HTMLElement {
       source,
       thumbnail_url: thumbnailUrl,
       track_key: trackKey,
-      track_id: playId || aiboxTrackId,
+      track_id: trackId,
+      playlist_id: playlistId,
       play,
       search,
       items,
       aibox,
+      aibox_playback_state: aiboxPlaybackState,
+      entity_playback_state: entityPlaybackState,
     };
   }
 
   _layTrangThaiHienThiPhat(playback, stateObj = this._doiTuongTrangThai()) {
     const entityState = String(stateObj?.state || "idle").toLowerCase();
     const rawPlaybackState = String(stateObj?.attributes?.playback_state_raw || "").toLowerCase();
-    const aiboxPlaying =
-      this._laPhatDangHoatDong(playback.aibox?.is_playing) ||
-      this._laPhatDangHoatDong(playback.aibox?.play_state) ||
-      this._laPhatDangHoatDong(playback.aibox?.state) ||
-      String(playback.aibox?.state || "").toLowerCase() === "playing";
-    const aiboxPaused =
-      this._laPhatKhongHoatDong(playback.aibox?.is_playing) ||
-      this._laPhatKhongHoatDong(playback.aibox?.play_state) ||
-      this._laPhatKhongHoatDong(playback.aibox?.state);
-    const hasAiboxState = ["is_playing", "play_state", "state"].some((key) => {
-      const value = playback.aibox?.[key];
-      if (value === undefined || value === null) return false;
-      return typeof value === "string" ? value.trim() !== "" : true;
-    });
-    const entityPlaying = entityState === "playing" || rawPlaybackState === "playing";
-    const entityPaused =
-      entityState === "paused" ||
-      entityState === "idle" ||
-      entityState === "off" ||
-      rawPlaybackState === "paused" ||
-      rawPlaybackState === "stopped" ||
-      rawPlaybackState === "idle" ||
-      rawPlaybackState === "off";
+    const aiboxState = this._giaiMaTrangThaiPhat(
+      playback.aibox?.state,
+      playback.aibox?.play_state,
+      playback.aibox?.is_playing
+    );
+    const entityPlaybackState = this._giaiMaTrangThaiPhat(rawPlaybackState, entityState);
     const forcedPaused = Date.now() < this._forcePauseUntil;
     const optimisticPlaying =
       Date.now() < this._optimisticPlayUntil &&
       this._lastPlayPauseSent === "play" &&
       !forcedPaused &&
-      !aiboxPaused &&
-      !entityPaused;
-    const hasExplicitAiboxState = hasAiboxState && (aiboxPlaying || aiboxPaused);
-    const isPlaying =
-      !forcedPaused &&
-      !aiboxPaused &&
-      (hasExplicitAiboxState
-        ? aiboxPlaying
-        : entityPlaying || (!entityPaused && optimisticPlaying));
-    const currentState = isPlaying
-      ? "playing"
-      : aiboxPaused || entityPaused || this._lastPlayPauseSent === "pause"
-        ? "paused"
-        : "idle";
+      aiboxState !== "paused" &&
+      aiboxState !== "idle" &&
+      entityPlaybackState !== "paused" &&
+      entityPlaybackState !== "idle";
+
+    let currentState = "idle";
+    if (!forcedPaused && aiboxState === "playing") {
+      currentState = "playing";
+    } else if (aiboxState) {
+      currentState = aiboxState;
+    } else if (!forcedPaused && entityPlaybackState === "playing") {
+      currentState = "playing";
+    } else if (entityPlaybackState) {
+      currentState = entityPlaybackState;
+    } else if (optimisticPlaying) {
+      currentState = "playing";
+    } else if (forcedPaused || this._lastPlayPauseSent === "pause") {
+      currentState = "paused";
+    }
 
     return {
-      isPlaying,
+      isPlaying: currentState === "playing",
       currentState,
       entityState,
       rawPlaybackState,
-      aiboxPlaying,
-      aiboxPaused,
-      entityPlaying,
-      entityPaused,
+      aiboxPlaying: aiboxState === "playing",
+      aiboxPaused: aiboxState === "paused",
+      aiboxIdle: aiboxState === "idle",
+      entityPlaying: entityPlaybackState === "playing",
+      entityPaused: entityPlaybackState === "paused",
+      entityIdle: entityPlaybackState === "idle",
     };
   }
 
@@ -1333,13 +1825,15 @@ class PhicommR1Card extends HTMLElement {
 
   _timDichVuTheoTab(tab) {
     if (tab === "zing") return "search_zing";
-    if (tab === "playlist" || tab === "playlists") return "search_playlist";
+    if (tab === "playlist") return "search_playlist";
+    if (this._laTabQuanLyPlaylist(tab)) return "";
     return "search_youtube";
   }
 
   _nguonKetQuaTheoTab(tab) {
     if (tab === "zing") return "zingmp3";
-    if (tab === "playlist" || tab === "playlists") return "youtube_playlist";
+    if (tab === "playlist") return "youtube_playlist";
+    if (this._laTabQuanLyPlaylist(tab)) return "";
     return "youtube";
   }
 
@@ -1434,6 +1928,7 @@ class PhicommR1Card extends HTMLElement {
     this._query = query;
     const service = this._timDichVuTheoTab(this._mediaSearchTab);
     const source = this._nguonKetQuaTheoTab(this._mediaSearchTab);
+    if (!service || !source) return;
     const searchHienTai = this._thuocTinh().last_music_search || {};
     const mocTruoc = this._mocCapNhatTimKiem(searchHienTai);
     const dauVetTruoc = this._dauVetKetQuaTimKiem(searchHienTai);
@@ -1474,13 +1969,28 @@ class PhicommR1Card extends HTMLElement {
   }
 
   async _xuLyPhatMuc(item, source) {
-    const resolvedId = this._layIdMucMedia(item);
-    if (!resolvedId) return;
-    const normalizedSource = String(source || "").toLowerCase();
-    if (normalizedSource.includes("zing")) {
-      await this._goiDichVu("media_player", "play_zing", { song_id: resolvedId });
+    const normalizedSource = String(source || item?.source || "").toLowerCase();
+    if (this._laMucPlaylist(item, normalizedSource)) {
+      const playlistId = this._chuoiKhongRongDauTien(
+        item?.playlist_id,
+        item?.playlistId,
+        item?.id
+      );
+      if (!playlistId) return;
+      await this._goiDichVu("media_player", "playlist_play", {
+        playlist_id: playlistId,
+      });
+      if (this._mediaSearchTab === "playlists") {
+        this._playlistDetailVisibleId = String(playlistId).trim();
+      }
+    } else if (normalizedSource.includes("zing")) {
+      const songId = this._chuoiKhongRongDauTien(item?.song_id, item?.songId, item?.id);
+      if (!songId) return;
+      await this._goiDichVu("media_player", "play_zing", { song_id: songId });
     } else {
-      await this._goiDichVu("media_player", "play_youtube", { video_id: resolvedId });
+      const videoId = this._chuoiKhongRongDauTien(item?.video_id, item?.videoId, item?.id);
+      if (!videoId) return;
+      await this._goiDichVu("media_player", "play_youtube", { video_id: videoId });
     }
     this._lastPlayPauseSent = "play";
     this._forcePauseUntil = 0;
@@ -1549,17 +2059,173 @@ class PhicommR1Card extends HTMLElement {
     await this._lamMoiEntity(350);
   }
 
+  _veThuVienPlaylist() {
+    const playlists = this._thuVienPlaylist();
+    const detail = this._chiTietPlaylistDangXem();
+    const showDetail = Boolean(this._playlistDetailVisibleId);
+
+    return `
+      <div class="playlist-toolbar">
+        <button id="btn-playlist-create" class="mini-btn mini-btn-primary" type="button">
+          <ha-icon icon="mdi:playlist-plus"></ha-icon>
+          <span>Tạo playlist</span>
+        </button>
+        <button id="btn-playlist-refresh" class="mini-btn" type="button">
+          <ha-icon icon="mdi:refresh"></ha-icon>
+          <span>${this._playlistLibraryLoading ? "Đang tải..." : "Làm mới"}</span>
+        </button>
+      </div>
+
+      <div class="playlist-library">
+        ${this._playlistLibraryLoading && playlists.length === 0 ? `
+          <div class="empty">Đang tải danh sách playlist...</div>
+        ` : playlists.length === 0 ? `
+          <div class="empty">Chưa có playlist nào. Tạo playlist đầu tiên để bắt đầu.</div>
+        ` : playlists.map((playlist, idx) => `
+          <div class="playlist-card">
+            <div class="playlist-card-main">
+              <div class="playlist-card-title">${this._maHoaHtml(playlist.name || "Playlist")}</div>
+              <div class="playlist-card-sub">${Number(playlist.song_count || 0)} bài hát</div>
+            </div>
+            <div class="playlist-card-actions">
+              <button class="mini-btn playlist-view-btn" type="button" data-playlist-view-index="${idx}">
+                <ha-icon icon="mdi:format-list-bulleted"></ha-icon>
+                <span>Xem</span>
+              </button>
+              <button class="mini-btn mini-btn-danger playlist-play-btn" type="button" data-playlist-play-index="${idx}">
+                <ha-icon icon="mdi:play"></ha-icon>
+                <span>Phát</span>
+              </button>
+              <button class="mini-btn playlist-delete-btn" type="button" data-playlist-delete-index="${idx}">
+                <ha-icon icon="mdi:trash-can-outline"></ha-icon>
+              </button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+
+      ${showDetail ? `
+        <div class="playlist-detail-shell">
+          <div class="playlist-detail-head">
+            <div>
+              <strong>${this._maHoaHtml(detail?.playlist_name || "Playlist")}</strong>
+              <div class="playlist-card-sub">${detail ? detail.items.length : 0} bài hát</div>
+            </div>
+            <button id="playlist-detail-close" class="mini-btn" type="button">
+              <ha-icon icon="mdi:close"></ha-icon>
+              <span>Đóng</span>
+            </button>
+          </div>
+          <div class="playlist-detail-list">
+            ${this._playlistDetailLoading ? `
+              <div class="empty">Đang tải bài hát trong playlist...</div>
+            ` : !detail ? `
+              <div class="empty">Chưa có dữ liệu playlist.</div>
+            ` : detail.items.length === 0 ? `
+              <div class="empty">Playlist này chưa có bài hát.</div>
+            ` : detail.items.map((item, idx) => `
+              <div class="playlist-song-row">
+                <div class="playlist-song-meta">
+                  <div class="playlist-song-title">${this._maHoaHtml(item.title || `Bài hát ${idx + 1}`)}</div>
+                  <div class="playlist-song-sub">
+                    ${this._maHoaHtml(item.artist || "Chưa rõ nghệ sĩ")}
+                    <span>${this._dinhDangThoiLuong(item.duration_seconds)}</span>
+                  </div>
+                </div>
+                <button
+                  class="mini-btn playlist-song-remove-btn"
+                  type="button"
+                  data-playlist-song-index="${Number(item.index ?? idx)}"
+                >
+                  <ha-icon icon="mdi:trash-can-outline"></ha-icon>
+                </button>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
+    `;
+  }
+
+  _veDialogPlaylist() {
+    const dialog = this._playlistDialog;
+    if (!dialog.open) return "";
+    const playlists = this._thuVienPlaylist();
+    const pendingTitle = dialog.pendingItem?.title || dialog.pendingItem?.name || "";
+    const confirmLabel =
+      dialog.mode === "create"
+        ? (dialog.busy ? "Đang tạo..." : "Tạo playlist")
+        : (dialog.busy ? "Đang xử lý..." : "Xác nhận");
+
+    return `
+      <div class="playlist-dialog-backdrop">
+        <div class="playlist-dialog" role="dialog" aria-modal="true" aria-label="Playlist">
+          <div class="playlist-dialog-head">
+            <strong>${dialog.mode === "create" ? "Tạo playlist" : "Thêm vào playlist"}</strong>
+            <button id="playlist-dialog-cancel" class="mini-btn" type="button">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+
+          ${dialog.mode === "add" ? `
+            <div class="playlist-dialog-note">
+              Bài hát: <strong>${this._maHoaHtml(pendingTitle || "Unknown")}</strong>
+            </div>
+            <label class="playlist-field">
+              <span>Chọn playlist có sẵn</span>
+              <select id="playlist-select" class="text-input playlist-select">
+                <option value="">-- Chọn playlist --</option>
+                ${playlists.map((playlist) => `
+                  <option value="${this._maHoaHtml(playlist.id)}" ${String(dialog.selectedPlaylistId) === String(playlist.id) ? "selected" : ""}>
+                    ${this._maHoaHtml(playlist.name || "Playlist")} (${Number(playlist.song_count || 0)} bài)
+                  </option>
+                `).join("")}
+              </select>
+            </label>
+          ` : ""}
+
+          <label class="playlist-field">
+            <span>${dialog.mode === "create" ? "Tên playlist" : "Hoặc tạo playlist mới"}</span>
+            <input
+              id="playlist-new-name"
+              class="text-input"
+              type="text"
+              placeholder="VD: Nhạc buổi sáng"
+              value="${this._maHoaHtml(dialog.newPlaylistName)}"
+            />
+          </label>
+
+          ${dialog.mode === "add" && playlists.length === 0 ? `
+            <div class="playlist-dialog-note">Chưa có playlist nào. Bạn có thể nhập tên để tạo mới ngay.</div>
+          ` : ""}
+          ${dialog.error ? `<div class="playlist-dialog-error">${this._maHoaHtml(dialog.error)}</div>` : ""}
+
+          <div class="playlist-dialog-actions">
+            <button id="playlist-dialog-confirm" class="mini-btn mini-btn-primary" type="button" ${dialog.busy ? "disabled" : ""}>
+              <span>${this._maHoaHtml(confirmLabel)}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _veTabMedia(stateObj) {
     const playback = this._thongTinPhat();
     const playbackState = this._layTrangThaiHienThiPhat(playback, stateObj);
     const isPlaying = playbackState.isPlaying;
     const currentState = playbackState.currentState;
+    const playPauseIcon = isPlaying ? "mdi:pause" : "mdi:play";
+    const playPauseTitle = isPlaying ? "Tạm dừng" : "Phát";
     const source =
       currentState === "idle" && this._laTieuDeNghi(playback.title)
         ? "CHO PHAT"
         : this._nhanNguon(playback.source);
     const volumePercent = Math.round(this._volumeLevel * 100);
-    const listSource = playback.search?.source || playback.play?.source || "youtube";
+    const searchData = this._duLieuTimKiemTheoTab();
+    const searchItems = Array.isArray(searchData.items) ? searchData.items : [];
+    const listSource = searchData.source || playback.search?.source || playback.play?.source || "youtube";
+    const isPlaylistManagerTab = this._mediaSearchTab === "playlists";
     const positionSeconds = this._epKieuGiayPhat(playback.position, 0);
     const durationSeconds = this._epKieuGiayPhat(playback.duration, 0);
 
@@ -1583,7 +2249,7 @@ class PhicommR1Card extends HTMLElement {
           <div class="hero-overlay"></div>
           <div class="hero-content">
           <div class="hero-top">
-            <div>
+            <div class="hero-copy">
               <h2 class="song-title">${this._maHoaHtml(playback.title)}</h2>
               <div class="song-sub">${this._maHoaHtml(playback.artist || "Chưa rõ nghệ sĩ")}</div>
             </div>
@@ -1600,7 +2266,7 @@ class PhicommR1Card extends HTMLElement {
               </div>
               <div class="controls-row">
                 <button id="btn-prev" class="icon-btn" title="Bài trước"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
-                <button id="btn-playpause" class="icon-btn icon-btn-primary" title="Phát hoặc tạm dừng"><ha-icon icon="mdi:play-pause"></ha-icon></button>
+                <button id="btn-playpause" class="icon-btn icon-btn-primary" title="${playPauseTitle}"><ha-icon icon="${playPauseIcon}"></ha-icon></button>
                 <button id="btn-stop" class="icon-btn" title="Dừng"><ha-icon icon="mdi:stop"></ha-icon></button>
                 <button id="btn-next" class="icon-btn" title="Bài tiếp theo"><ha-icon icon="mdi:skip-next"></ha-icon></button>
               </div>
@@ -1638,10 +2304,12 @@ class PhicommR1Card extends HTMLElement {
           <button class="subtab ${this._mediaSearchTab === "playlists" ? "active" : ""}" data-media-tab="playlists">Playlists</button>
         </div>
 
-        <div class="search-row">
-          <input id="media-query" class="text-input" type="text" placeholder="Tìm bài hát..." value="${this._maHoaHtml(this._query)}" />
-          <button id="btn-search" class="icon-btn icon-btn-primary" title="Tìm kiếm"><ha-icon icon="mdi:magnify"></ha-icon></button>
-        </div>
+        ${isPlaylistManagerTab ? this._veThuVienPlaylist() : `
+          <div class="search-row">
+            <input id="media-query" class="text-input" type="text" placeholder="${this._maHoaHtml(this._placeholderTimKiemMedia())}" value="${this._maHoaHtml(this._query)}" />
+            <button id="btn-search" class="icon-btn icon-btn-primary" title="Tìm kiếm"><ha-icon icon="mdi:magnify"></ha-icon></button>
+          </div>
+        `}
 
         <div class="volume-wrap">
           <div class="label-line">
@@ -1651,49 +2319,62 @@ class PhicommR1Card extends HTMLElement {
           <input id="media-volume" type="range" min="0" max="100" step="1" value="${volumePercent}" />
         </div>
 
-        <div class="results">
-          ${playback.items.length === 0 ? `
-            <div class="empty">
-              Chưa có kết quả tìm kiếm. Nhập từ khóa và bấm Tìm kiếm.
-            </div>
-          ` : playback.items.map((item, idx) => {
-            const itemId = this._layIdMucMedia(item);
-            const itemTitle = item.title || `Bản nhạc ${idx + 1}`;
-            const itemArtist = item.artist || item.channel || "Chưa rõ nghệ sĩ";
-            return `
-            <div
-              class="result-item ${itemId ? "playable" : ""}"
-              data-id="${this._maHoaHtml(itemId)}"
-              data-source="${this._maHoaHtml(listSource)}"
-              role="${itemId ? "button" : ""}"
-              tabindex="${itemId ? "0" : "-1"}"
-              title="${itemId ? "Nhấn Enter hoặc bấm để phát" : ""}"
-            >
-              <div class="thumb-wrap">
-                ${item.thumbnail_url ? `<img class="thumb" src="${this._maHoaHtml(item.thumbnail_url)}" alt="" />` : `<div class="thumb fallback"><ha-icon icon="mdi:music-note"></ha-icon></div>`}
+        ${isPlaylistManagerTab ? "" : `
+          <div class="results">
+            ${searchItems.length === 0 ? `
+              <div class="empty">
+                Chưa có kết quả tìm kiếm. Nhập từ khóa và bấm Tìm kiếm.
               </div>
-              <div class="result-meta">
-                <div class="result-title">${this._maHoaHtml(itemTitle)}</div>
-                <div class="result-artist">${this._maHoaHtml(itemArtist)}</div>
-                <div class="result-duration">${this._dinhDangThoiLuong(item.duration_seconds)}</div>
+            ` : searchItems.map((item, idx) => {
+              const itemId = this._layIdMucMedia(item);
+              const itemTitle = item.title || `Bản nhạc ${idx + 1}`;
+              const itemArtist = item.artist || item.channel || "Chưa rõ nghệ sĩ";
+              const metaValue = this._laMucPlaylist(item, listSource)
+                ? `${Number(item.song_count || 0)} bài`
+                : this._dinhDangThoiLuong(item.duration_seconds);
+              const canAdd = this._coTheThemPlaylist(item, listSource);
+              return `
+              <div
+                class="result-item ${itemId ? "playable" : ""}"
+                data-search-index="${idx}"
+                role="${itemId ? "button" : ""}"
+                tabindex="${itemId ? "0" : "-1"}"
+                title="${itemId ? "Nhấn Enter hoặc bấm để phát" : ""}"
+              >
+                <div class="thumb-wrap">
+                  ${item.thumbnail_url ? `<img class="thumb" src="${this._maHoaHtml(item.thumbnail_url)}" alt="" />` : `<div class="thumb fallback"><ha-icon icon="mdi:music-note"></ha-icon></div>`}
+                </div>
+                <div class="result-meta">
+                  <div class="result-title">${this._maHoaHtml(itemTitle)}</div>
+                  <div class="result-artist">${this._maHoaHtml(itemArtist)}</div>
+                  <div class="result-duration">${this._maHoaHtml(metaValue)}</div>
+                </div>
+                <div class="result-actions">
+                  ${canAdd ? `
+                    <button
+                      class="mini-btn mini-btn-accent add-btn"
+                      type="button"
+                      data-search-index="${idx}"
+                      title="Thêm vào playlist"
+                    >
+                      <ha-icon icon="mdi:plus"></ha-icon>
+                    </button>
+                  ` : ""}
+                  <button
+                    class="mini-btn mini-btn-danger play-btn"
+                    type="button"
+                    data-search-index="${idx}"
+                  >
+                    <ha-icon icon="mdi:play"></ha-icon>
+                    <span>Phát</span>
+                  </button>
+                </div>
               </div>
-              <div class="result-actions">
-                <button
-                  class="mini-btn mini-btn-accent add-btn"
-                  data-add-title="${this._maHoaHtml(itemTitle)}"
-                  title="Thêm vào ô tìm kiếm"
-                >
-                  <ha-icon icon="mdi:plus"></ha-icon>
-                </button>
-                <button class="mini-btn mini-btn-danger play-btn" data-id="${this._maHoaHtml(itemId)}" data-source="${this._maHoaHtml(listSource)}">
-                  <ha-icon icon="mdi:play"></ha-icon>
-                  <span>Phát</span>
-                </button>
-              </div>
-            </div>
-          `;
-          }).join("")}
-        </div>
+            `;
+            }).join("")}
+          </div>
+        `}
+        ${this._veDialogPlaylist()}
       </section>
     `;
   }
@@ -2233,6 +2914,11 @@ class PhicommR1Card extends HTMLElement {
           gap: 12px;
         }
 
+        .hero-copy {
+          flex: 1;
+          min-width: 0;
+        }
+
         .song-title {
           margin: 0;
           font-size: 16px;
@@ -2248,7 +2934,7 @@ class PhicommR1Card extends HTMLElement {
         .song-sub {
           margin-top: 4px;
           color: #d3dffa;
-          font-size: 15px;
+          font-size: 13px;
           font-weight: 600;
         }
 
@@ -2256,10 +2942,14 @@ class PhicommR1Card extends HTMLElement {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          min-width: 92px;
+          flex-shrink: 0;
+          min-width: 0;
           height: 36px;
           padding: 0 12px;
           border-radius: 11px;
+          max-width: 100%;
+          white-space: nowrap;
+          word-break: keep-all;
           font-size: 13px;
           font-weight: 800;
           letter-spacing: 0.8px;
@@ -2602,6 +3292,174 @@ class PhicommR1Card extends HTMLElement {
           color: var(--muted);
           text-align: center;
           font-size: 14px;
+        }
+
+        .playlist-toolbar {
+          display: flex;
+          gap: 8px;
+          padding: 8px 10px 4px;
+          flex-wrap: wrap;
+        }
+
+        .playlist-library,
+        .playlist-detail-list {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .playlist-library {
+          padding: 6px 10px 10px;
+        }
+
+        .playlist-card,
+        .playlist-detail-shell {
+          border: 1px solid rgba(70, 106, 233, 0.35);
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.03);
+        }
+
+        .playlist-card {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 12px;
+        }
+
+        .playlist-card-main,
+        .playlist-song-meta {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .playlist-card-title,
+        .playlist-song-title {
+          font-size: 13px;
+          font-weight: 700;
+          color: #fff;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .playlist-card-sub,
+        .playlist-song-sub {
+          font-size: 11px;
+          color: var(--muted);
+        }
+
+        .playlist-song-sub {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          justify-content: space-between;
+        }
+
+        .playlist-card-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+
+        .playlist-view-btn,
+        .playlist-delete-btn,
+        .playlist-song-remove-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+        }
+
+        .playlist-detail-shell {
+          margin: 0 10px 12px;
+          padding: 12px;
+        }
+
+        .playlist-detail-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 10px;
+        }
+
+        .playlist-song-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          border: 1px solid rgba(70, 106, 233, 0.22);
+          border-radius: 10px;
+          background: rgba(8, 19, 45, 0.58);
+          padding: 10px;
+        }
+
+        .playlist-dialog-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 25;
+          background: rgba(3, 8, 20, 0.72);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+        }
+
+        .playlist-dialog {
+          width: min(100%, 360px);
+          border-radius: 16px;
+          border: 1px solid rgba(91, 125, 255, 0.4);
+          background: linear-gradient(180deg, rgba(12, 21, 49, 0.98), rgba(10, 17, 39, 0.98));
+          box-shadow: 0 18px 42px rgba(0, 0, 0, 0.35);
+          padding: 14px;
+        }
+
+        .playlist-dialog-head,
+        .playlist-dialog-actions,
+        .playlist-field {
+          display: flex;
+          gap: 10px;
+        }
+
+        .playlist-dialog-head {
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 12px;
+        }
+
+        .playlist-field {
+          flex-direction: column;
+          margin-bottom: 10px;
+        }
+
+        .playlist-field span,
+        .playlist-dialog-note {
+          color: var(--muted);
+          font-size: 12px;
+        }
+
+        .playlist-dialog-note {
+          margin-bottom: 10px;
+          line-height: 1.45;
+        }
+
+        .playlist-select {
+          appearance: none;
+        }
+
+        .playlist-dialog-error {
+          border: 1px solid rgba(248, 88, 92, 0.4);
+          background: rgba(234, 45, 50, 0.1);
+          color: #ffd7d8;
+          border-radius: 10px;
+          padding: 10px 12px;
+          font-size: 12px;
+          margin-bottom: 10px;
+        }
+
+        .playlist-dialog-actions {
+          justify-content: flex-end;
         }
 
         .result-item {
@@ -3414,9 +4272,10 @@ class PhicommR1Card extends HTMLElement {
             font-size: 12px;
           }
           .pill {
-            min-width: 82px;
+            min-width: 0;
             height: 32px;
             font-size: 12px;
+            padding: 0 10px;
           }
           .player-stage {
             grid-template-columns: 72px minmax(0, 1fr);
@@ -3528,6 +4387,34 @@ class PhicommR1Card extends HTMLElement {
             min-width: 60px;
             min-height: 26px;
             padding: 0 7px;
+          }
+
+          .playlist-toolbar {
+            gap: 6px;
+          }
+
+          .playlist-card {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .playlist-card-actions,
+          .playlist-detail-head {
+            flex-wrap: wrap;
+          }
+
+          .playlist-detail-shell {
+            margin: 0 10px 10px;
+            padding: 10px;
+          }
+
+          .playlist-song-row {
+            padding: 8px;
+          }
+
+          .playlist-dialog {
+            width: min(100%, 340px);
+            padding: 12px;
           }
 
           .chat-shell-header {
@@ -4134,9 +5021,14 @@ class PhicommR1Card extends HTMLElement {
     });
 
     root.querySelectorAll("[data-media-tab]").forEach((el) => {
-      el.addEventListener("click", () => {
-        this._mediaSearchTab = el.dataset.mediaTab || "songs";
+      el.addEventListener("click", async () => {
+        const nextTab = el.dataset.mediaTab || "songs";
+        const changedTab = this._mediaSearchTab !== nextTab;
+        this._mediaSearchTab = nextTab;
         this._veGiaoDien();
+        if (changedTab && nextTab === "playlists") {
+          await this._taiThuVienPlaylist();
+        }
       });
     });
 
@@ -4254,14 +5146,7 @@ class PhicommR1Card extends HTMLElement {
         this._livePositionSeconds = 0;
         this._liveDurationSeconds = 0;
         this._livePlaying = false;
-        this._nowPlayingCache = {
-          trackKey: "",
-          title: "",
-          artist: "",
-          source: "",
-          thumbnail_url: "",
-          duration: 0,
-        };
+        this._nowPlayingCache = this._taoNowPlayingCache();
         this._dongBoTienDoDom();
         this._capNhatHenGioTienDo();
         await this._goiDichVu("media_player", "media_stop");
@@ -4290,47 +5175,187 @@ class PhicommR1Card extends HTMLElement {
       });
     }
 
-    const playFromDataset = async (dataset) => {
-      const id = dataset?.id || "";
-      const source = dataset?.source || "";
-      if (!id) return;
-      await this._xuLyPhatMuc({ id }, source);
+    const layKetQuaTimKiemHienTai = () => this._duLieuTimKiemTheoTab().items || [];
+    const layMucTimKiemTuElement = (element) => {
+      const index = Number(element?.dataset?.searchIndex);
+      if (!Number.isFinite(index) || index < 0) return null;
+      return layKetQuaTimKiemHienTai()[index] || null;
     };
 
     root.querySelectorAll(".play-btn").forEach((el) => {
       el.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        await playFromDataset(el.dataset);
+        const item = layMucTimKiemTuElement(el);
+        if (!item) return;
+        await this._xuLyPhatMuc(
+          item,
+          item.source || this._nguonKetQuaTheoTab(this._mediaSearchTab)
+        );
       });
     });
 
     root.querySelectorAll(".add-btn").forEach((el) => {
-      el.addEventListener("click", (ev) => {
+      el.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        const title = el.dataset.addTitle || "";
-        if (!title) return;
-        this._query = title;
-        const searchInput = root.getElementById("media-query");
-        if (searchInput) {
-          searchInput.value = title;
-          searchInput.focus();
-          const at = searchInput.value.length;
-          searchInput.setSelectionRange(at, at);
-        }
+        const item = layMucTimKiemTuElement(el);
+        if (!item) return;
+        await this._moDialogThemPlaylist(
+          item,
+          item.source || this._nguonKetQuaTheoTab(this._mediaSearchTab)
+        );
       });
     });
 
     root.querySelectorAll(".result-item.playable").forEach((el) => {
       el.addEventListener("click", async (ev) => {
         if (ev.target && (ev.target.closest(".play-btn") || ev.target.closest(".add-btn"))) return;
-        await playFromDataset(el.dataset);
+        const item = layMucTimKiemTuElement(el);
+        if (!item) return;
+        await this._xuLyPhatMuc(
+          item,
+          item.source || this._nguonKetQuaTheoTab(this._mediaSearchTab)
+        );
       });
       el.addEventListener("keydown", async (ev) => {
         if (ev.key !== "Enter" && ev.key !== " ") return;
         ev.preventDefault();
-        await playFromDataset(el.dataset);
+        const item = layMucTimKiemTuElement(el);
+        if (!item) return;
+        await this._xuLyPhatMuc(
+          item,
+          item.source || this._nguonKetQuaTheoTab(this._mediaSearchTab)
+        );
       });
     });
+
+    const playlistCreateBtn = root.getElementById("btn-playlist-create");
+    if (playlistCreateBtn) {
+      playlistCreateBtn.addEventListener("click", () => {
+        this._moDialogTaoPlaylist();
+      });
+    }
+
+    const playlistRefreshBtn = root.getElementById("btn-playlist-refresh");
+    if (playlistRefreshBtn) {
+      playlistRefreshBtn.addEventListener("click", async () => {
+        await this._taiThuVienPlaylist();
+      });
+    }
+
+    root.querySelectorAll("[data-playlist-view-index]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const index = Number(el.dataset.playlistViewIndex);
+        const playlist = this._thuVienPlaylist()[index];
+        if (!playlist?.id) return;
+        await this._taiChiTietPlaylist(playlist.id);
+      });
+    });
+
+    root.querySelectorAll("[data-playlist-play-index]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const index = Number(el.dataset.playlistPlayIndex);
+        const playlist = this._thuVienPlaylist()[index];
+        if (!playlist?.id) return;
+        await this._taiChiTietPlaylist(playlist.id, false);
+        await this._xuLyPhatMuc(
+          { id: playlist.id, playlist_id: playlist.id, kind: "playlist", title: playlist.name },
+          "youtube_playlist"
+        );
+      });
+    });
+
+    root.querySelectorAll("[data-playlist-delete-index]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const index = Number(el.dataset.playlistDeleteIndex);
+        const playlist = this._thuVienPlaylist()[index];
+        if (!playlist?.id) return;
+        if (!confirm(`Xóa playlist "${playlist.name || "Playlist"}"?`)) return;
+        this._playlistLibraryLoading = true;
+        this._veGiaoDien();
+        try {
+          await this._goiDichVu("media_player", "playlist_delete", {
+            playlist_id: playlist.id,
+          });
+          if (String(this._playlistDetailVisibleId) === String(playlist.id)) {
+            this._playlistDetailVisibleId = "";
+          }
+        } finally {
+          this._playlistLibraryLoading = false;
+          this._veGiaoDien();
+        }
+      });
+    });
+
+    const playlistDetailClose = root.getElementById("playlist-detail-close");
+    if (playlistDetailClose) {
+      playlistDetailClose.addEventListener("click", () => {
+        this._playlistDetailVisibleId = "";
+        this._veGiaoDien();
+      });
+    }
+
+    root.querySelectorAll("[data-playlist-song-index]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const detail = this._chiTietPlaylistDangXem();
+        const playlistId = String(detail?.playlist_id || this._playlistDetailVisibleId || "").trim();
+        const songIndex = Number(el.dataset.playlistSongIndex);
+        if (!playlistId || !Number.isFinite(songIndex)) return;
+        if (!confirm(`Xóa bài #${songIndex + 1} khỏi playlist?`)) return;
+        this._playlistDetailLoading = true;
+        this._veGiaoDien();
+        try {
+          await this._goiDichVu("media_player", "playlist_remove_song", {
+            playlist_id: playlistId,
+            song_index: songIndex,
+          });
+          await this._taiChiTietPlaylist(playlistId, false);
+          await this._taiThuVienPlaylist(false);
+        } finally {
+          this._playlistDetailLoading = false;
+          this._veGiaoDien();
+        }
+      });
+    });
+
+    const playlistDialogCancel = root.getElementById("playlist-dialog-cancel");
+    if (playlistDialogCancel) {
+      playlistDialogCancel.addEventListener("click", () => {
+        if (this._playlistDialog.busy) return;
+        this._dongDialogPlaylist();
+      });
+    }
+
+    const playlistDialogConfirm = root.getElementById("playlist-dialog-confirm");
+    if (playlistDialogConfirm) {
+      playlistDialogConfirm.addEventListener("click", async () => {
+        await this._xacNhanDialogPlaylist();
+      });
+    }
+
+    const playlistSelect = root.getElementById("playlist-select");
+    if (playlistSelect) {
+      playlistSelect.addEventListener("change", (ev) => {
+        this._playlistDialog = {
+          ...this._playlistDialog,
+          selectedPlaylistId: ev.target.value,
+        };
+      });
+    }
+
+    const playlistNewName = root.getElementById("playlist-new-name");
+    if (playlistNewName) {
+      playlistNewName.addEventListener("input", (ev) => {
+        this._playlistDialog = {
+          ...this._playlistDialog,
+          newPlaylistName: ev.target.value,
+        };
+      });
+      playlistNewName.addEventListener("keydown", async (ev) => {
+        if (ev.key !== "Enter") return;
+        ev.preventDefault();
+        await this._xacNhanDialogPlaylist();
+      });
+    }
 
     const wakeEnabled = root.getElementById("wake-enabled");
     if (wakeEnabled) {

@@ -51,6 +51,13 @@ SERVICE_SEARCH_PLAYLIST = "search_playlist"
 SERVICE_SEARCH_ZING = "search_zing"
 SERVICE_PLAY_YOUTUBE = "play_youtube"
 SERVICE_PLAY_ZING = "play_zing"
+SERVICE_PLAYLIST_LIST = "playlist_list"
+SERVICE_PLAYLIST_CREATE = "playlist_create"
+SERVICE_PLAYLIST_DELETE = "playlist_delete"
+SERVICE_PLAYLIST_GET_SONGS = "playlist_get_songs"
+SERVICE_PLAYLIST_ADD_SONG = "playlist_add_song"
+SERVICE_PLAYLIST_REMOVE_SONG = "playlist_remove_song"
+SERVICE_PLAYLIST_PLAY = "playlist_play"
 SERVICE_WAKE_WORD_SET_ENABLED = "wake_word_set_enabled"
 SERVICE_WAKE_WORD_GET_ENABLED = "wake_word_get_enabled"
 SERVICE_WAKE_WORD_SET_SENSITIVITY = "wake_word_set_sensitivity"
@@ -104,6 +111,15 @@ ATTR_EXPECT_TYPE = "expect_type"
 ATTR_QUERY = "query"
 ATTR_VIDEO_ID = "video_id"
 ATTR_SONG_ID = "song_id"
+ATTR_PLAYLIST_ID = "playlist_id"
+ATTR_NAME = "name"
+ATTR_TITLE = "title"
+ATTR_ID = "id"
+ATTR_SOURCE = "source"
+ATTR_ARTIST = "artist"
+ATTR_THUMBNAIL_URL = "thumbnail_url"
+ATTR_DURATION_SECONDS = "duration_seconds"
+ATTR_SONG_INDEX = "song_index"
 ATTR_SENSITIVITY = "sensitivity"
 ATTR_TEXT = "text"
 ATTR_ENABLED = "enabled"
@@ -209,6 +225,52 @@ async def async_setup_entry(
         SERVICE_PLAY_ZING,
         {vol.Required(ATTR_SONG_ID): cv.string},
         "async_play_zing",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_LIST,
+        {},
+        "async_playlist_list",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_CREATE,
+        {vol.Required(ATTR_NAME): cv.string},
+        "async_playlist_create",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_DELETE,
+        {vol.Required(ATTR_PLAYLIST_ID): vol.Any(vol.Coerce(int), cv.string)},
+        "async_playlist_delete",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_GET_SONGS,
+        {vol.Required(ATTR_PLAYLIST_ID): vol.Any(vol.Coerce(int), cv.string)},
+        "async_playlist_get_songs",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_ADD_SONG,
+        {
+            vol.Required(ATTR_PLAYLIST_ID): vol.Any(vol.Coerce(int), cv.string),
+            vol.Required(ATTR_SOURCE): cv.string,
+            vol.Required(ATTR_ID): cv.string,
+            vol.Optional(ATTR_TITLE, default=""): cv.string,
+            vol.Optional(ATTR_ARTIST, default=""): cv.string,
+            vol.Optional(ATTR_THUMBNAIL_URL, default=""): cv.string,
+            vol.Optional(ATTR_DURATION_SECONDS, default=0): vol.Coerce(int),
+        },
+        "async_playlist_add_song",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_REMOVE_SONG,
+        {
+            vol.Required(ATTR_PLAYLIST_ID): vol.Any(vol.Coerce(int), cv.string),
+            vol.Required(ATTR_SONG_INDEX): vol.Coerce(int),
+        },
+        "async_playlist_remove_song",
+    )
+    platform.async_register_entity_service(
+        SERVICE_PLAYLIST_PLAY,
+        {vol.Required(ATTR_PLAYLIST_ID): vol.Any(vol.Coerce(int), cv.string)},
+        "async_playlist_play",
     )
     platform.async_register_entity_service(
         SERVICE_WAKE_WORD_SET_ENABLED,
@@ -471,6 +533,9 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         )
         self._last_search: dict[str, Any] = {}
         self._last_play: dict[str, Any] = {}
+        self._playlist_library: dict[str, Any] = {}
+        self._playlist_detail: dict[str, Any] = {}
+        self._last_playlist_event: dict[str, Any] = {}
         self._wake_word: dict[str, Any] = {}
         self._custom_ai: dict[str, Any] = {}
         self._chat_state: dict[str, Any] = {}
@@ -501,6 +566,36 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
     def volume_level(self) -> float | None:
         """Return volume level in range 0..1."""
         return self.coordinator.data.volume_level
+
+    @property
+    def media_title(self) -> str | None:
+        """Return current media title from the latest playback snapshot."""
+        title = self._chu_dau_tien(self._aibox_playback_snapshot(), ("title",))
+        if not title:
+            return None
+        if title.strip().lower() in {"không có nhạc", "khong co nhac", "chưa có bài đang phát", "chua co bai dang phat"}:
+            return None
+        return title
+
+    @property
+    def media_artist(self) -> str | None:
+        """Return current artist/channel from the latest playback snapshot."""
+        return self._chu_dau_tien(self._aibox_playback_snapshot(), ("artist", "channel"))
+
+    @property
+    def media_duration(self) -> int | None:
+        """Return current media duration in seconds."""
+        return self._ep_kieu_giay_phat(self._aibox_playback_snapshot().get("duration"))
+
+    @property
+    def media_position(self) -> int | None:
+        """Return current media position in seconds."""
+        return self._ep_kieu_giay_phat(self._aibox_playback_snapshot().get("position"))
+
+    @property
+    def media_image_url(self) -> str | None:
+        """Return current media artwork URL."""
+        return self._chu_dau_tien(self._aibox_playback_snapshot(), ("thumbnail_url",))
 
     @property
     def is_volume_muted(self) -> bool | None:
@@ -535,6 +630,12 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             attrs["last_music_search"] = self._last_search
         if self._last_play:
             attrs["last_music_play"] = self._last_play
+        if self._playlist_library:
+            attrs["playlist_library"] = self._playlist_library
+        if self._playlist_detail:
+            attrs["playlist_detail"] = self._playlist_detail
+        if self._last_playlist_event:
+            attrs["last_playlist_event"] = self._last_playlist_event
 
         # Let coordinator-polled state win over local optimistic overrides.
         merged_wake = dict(self._wake_word) if self._wake_word else {}
@@ -560,7 +661,7 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             attrs["last_chat_items"] = self._last_chat_items
 
         # Aibox playback: prefer coordinator-polled, fallback to client cache
-        aibox_playback = status.aibox_playback if status.aibox_playback else self._client.get_last_aibox_playback()
+        aibox_playback = self._aibox_playback_snapshot()
         if aibox_playback:
             attrs["aibox_playback"] = aibox_playback
 
@@ -591,6 +692,186 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             if text:
                 return text
         return None
+
+    @staticmethod
+    def _playlist_id_text(value: Any) -> str:
+        """Normalize playlist id for HA attributes and outbound requests."""
+        if value is None:
+            return ""
+        text = str(value).strip()
+        return text
+
+    def _aibox_playback_snapshot(self) -> dict[str, Any]:
+        """Return the latest normalized Aibox playback payload."""
+        status = self.coordinator.data
+        playback = status.aibox_playback if status.aibox_playback else self._client.get_last_aibox_playback()
+        return dict(playback) if isinstance(playback, dict) else {}
+
+    @staticmethod
+    def _ep_kieu_giay_phat(value: Any) -> int | None:
+        """Coerce device playback seconds into a positive integer."""
+        if value is None or value == "":
+            return None
+        with suppress(TypeError, ValueError):
+            numeric = int(float(value))
+            return max(0, numeric)
+        return None
+
+    def _tim_muc_tim_kiem_theo_id(self, item_id: str) -> dict[str, Any] | None:
+        """Return the last search item matching a playback identifier."""
+        normalized_id = str(item_id or "").strip()
+        if not normalized_id:
+            return None
+        items = self._last_search.get("items")
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            candidates = {
+                str(value).strip()
+                for value in (
+                    item.get("id"),
+                    item.get("video_id"),
+                    item.get("song_id"),
+                    item.get("playlist_id"),
+                )
+                if value is not None and str(value).strip()
+            }
+            if normalized_id in candidates:
+                return item
+        return None
+
+    def _tao_last_play_payload(
+        self,
+        *,
+        source: str,
+        item_id: str,
+        video_id: str = "",
+        song_id: str = "",
+        playlist_id: str = "",
+        title: str = "",
+        artist: str = "",
+        thumbnail_url: str = "",
+        duration_seconds: Any = None,
+    ) -> dict[str, Any]:
+        """Build a short-lived playback fallback payload for the frontend."""
+        payload: dict[str, Any] = {
+            "source": source,
+            "id": item_id,
+            "updated_at_ms": int(time.time() * 1000),
+        }
+        if video_id:
+            payload["video_id"] = video_id
+        if song_id:
+            payload["song_id"] = song_id
+        if playlist_id:
+            payload["playlist_id"] = playlist_id
+        if title:
+            payload["title"] = title
+        if artist:
+            payload["artist"] = artist
+        if thumbnail_url:
+            payload["thumbnail_url"] = thumbnail_url
+        duration_value = self._ep_kieu_giay_phat(duration_seconds)
+        if duration_value is not None:
+            payload["duration_seconds"] = duration_value
+        return payload
+
+    def _tao_playlist_item_rut_gon(self, playlist: dict[str, Any]) -> dict[str, Any]:
+        """Compress one playlist entry for entity attributes."""
+        items = playlist.get("items")
+        count = playlist.get("song_count", playlist.get("count"))
+        if count is None and isinstance(items, list):
+            count = len(items)
+        return {
+            "id": self._playlist_id_text(playlist.get("id", playlist.get("playlist_id"))),
+            "name": self._chu_dau_tien(playlist, ("name", "playlist_name")) or "Playlist",
+            "song_count": int(count or 0),
+        }
+
+    def _tao_playlist_library_rut_gon(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Compress playlist library payload for entity attributes."""
+        playlists = response.get("playlists")
+        compact_items: list[dict[str, Any]] = []
+        if isinstance(playlists, list):
+            for playlist in playlists[:40]:
+                if isinstance(playlist, dict):
+                    compact_items.append(self._tao_playlist_item_rut_gon(playlist))
+        return {
+            "updated_at_ms": int(time.time() * 1000),
+            "success": bool(response.get("success", True)),
+            "playlists": compact_items,
+        }
+
+    def _tao_playlist_detail_rut_gon(
+        self,
+        playlist_id: str,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Compress playlist songs payload for entity attributes."""
+        songs = response.get("songs")
+        compact_items: list[dict[str, Any]] = []
+        if isinstance(songs, list):
+            for index, song in enumerate(songs[:100]):
+                if not isinstance(song, dict):
+                    continue
+                compact_items.append(
+                    {
+                        "index": index,
+                        "kind": "track",
+                        "source": self._chu_dau_tien(song, ("source",))
+                        or ("zingmp3" if song.get("song_id") else "youtube"),
+                        "title": self._chu_dau_tien(song, ("title", "name")) or "Unknown",
+                        "id": self._chu_dau_tien(song, ("song_id", "video_id", "id")) or "",
+                        "video_id": self._chu_dau_tien(song, ("video_id",)),
+                        "song_id": self._chu_dau_tien(song, ("song_id",)),
+                        "artist": self._chu_dau_tien(song, ("artist", "channel", "author")),
+                        "duration_seconds": song.get("duration_seconds"),
+                        "thumbnail_url": self._chu_dau_tien(song, ("thumbnail_url", "thumbnail")),
+                    }
+                )
+        return {
+            "updated_at_ms": int(time.time() * 1000),
+            "success": bool(response.get("success", True)),
+            "playlist_id": playlist_id,
+            "playlist_name": self._chu_dau_tien(response, ("playlist_name", "name")) or "Playlist",
+            "items": compact_items,
+        }
+
+    def _tao_playlist_event_rut_gon(
+        self,
+        response: dict[str, Any],
+        *,
+        default_type: str,
+        playlist_id: Any = None,
+        playlist_name: str = "",
+    ) -> dict[str, Any]:
+        """Compress playlist mutation responses for frontend waiting logic."""
+        playlist = response.get("playlist") if isinstance(response.get("playlist"), dict) else {}
+        resolved_playlist_id = self._playlist_id_text(
+            playlist_id
+            if playlist_id is not None
+            else response.get("playlist_id", playlist.get("id", playlist.get("playlist_id")))
+        )
+        resolved_playlist_name = (
+            self._chu_dau_tien(playlist, ("name", "playlist_name"))
+            or self._chu_dau_tien(response, ("playlist_name", "name"))
+            or str(playlist_name or "").strip()
+        )
+        event: dict[str, Any] = {
+            "updated_at_ms": int(time.time() * 1000),
+            "type": str(response.get("type") or default_type),
+            "success": bool(response.get("success", True)),
+        }
+        if resolved_playlist_id:
+            event["playlist_id"] = resolved_playlist_id
+        if resolved_playlist_name:
+            event["playlist_name"] = resolved_playlist_name
+        song_index = response.get("song_index")
+        if isinstance(song_index, int):
+            event["song_index"] = song_index
+        return event
 
     @staticmethod
     def _ep_kieu_bool(value: Any, fallback: bool = False) -> bool:
@@ -760,30 +1041,56 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         response: dict[str, Any],
     ) -> dict[str, Any]:
         """Compress search payload so it fits comfortably in entity attributes."""
-        songs = response.get("songs")
+        songs: list[Any] = []
+        for key in ("songs", "playlists", "results"):
+            raw_items = response.get(key)
+            if isinstance(raw_items, list):
+                songs = raw_items
+                break
         compact_items: list[dict[str, Any]] = []
-        if isinstance(songs, list):
-            for song in songs[:10]:
-                if not isinstance(song, dict):
-                    continue
-                compact_items.append(
-                    {
-                        "title": self._chu_dau_tien(song, ("title", "name")) or "Unknown",
-                        "id": self._chu_dau_tien(
-                            song,
-                            ("song_id", "video_id", "playlist_id", "id"),
-                        ),
-                        "artist": self._chu_dau_tien(song, ("artist", "channel", "author")),
-                        "duration_seconds": song.get("duration_seconds"),
-                        "thumbnail_url": self._chu_dau_tien(song, ("thumbnail_url", "thumbnail")),
-                    }
-                )
+        for song in songs[:10]:
+            if not isinstance(song, dict):
+                continue
+            fallback_id = self._chu_dau_tien(song, ("id",))
+            playlist_id = self._chu_dau_tien(song, ("playlist_id",))
+            video_id = self._chu_dau_tien(song, ("video_id",))
+            song_id = self._chu_dau_tien(song, ("song_id",))
+            items = song.get("items")
+            song_count = song.get("song_count", song.get("count"))
+            if song_count is None and isinstance(items, list):
+                song_count = len(items)
+            kind = "playlist" if source == "youtube_playlist" or playlist_id else "track"
+            resolved_playlist_id = playlist_id or (fallback_id if kind == "playlist" else "")
+            item_source = (
+                "youtube_playlist"
+                if kind == "playlist"
+                else ("zingmp3" if song_id else "youtube")
+            )
+            compact_items.append(
+                {
+                    "kind": kind,
+                    "source": item_source,
+                    "title": self._chu_dau_tien(song, ("title", "name")) or "Unknown",
+                    "id": (
+                        self._chu_dau_tien(song, ("playlist_id", "id", "video_id", "song_id"))
+                        if kind == "playlist"
+                        else self._chu_dau_tien(song, ("song_id", "video_id", "id", "playlist_id"))
+                    ),
+                    "video_id": video_id,
+                    "song_id": song_id,
+                    "playlist_id": resolved_playlist_id,
+                    "artist": self._chu_dau_tien(song, ("artist", "channel", "author")),
+                    "duration_seconds": song.get("duration_seconds"),
+                    "thumbnail_url": self._chu_dau_tien(song, ("thumbnail_url", "thumbnail")),
+                    "song_count": int(song_count or 0),
+                }
+            )
 
         return {
             "source": source,
             "query": query,
             "success": bool(response.get("success", False)),
-            "total": len(songs) if isinstance(songs, list) else 0,
+            "total": len(songs),
             "updated_at_ms": int(time.time() * 1000),
             "items": compact_items,
         }
@@ -900,7 +1207,16 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         """Entity service: play YouTube song by video id."""
         normalized_video_id = video_id.strip()
         await self._client.async_play_youtube(normalized_video_id)
-        self._last_play = {"source": "youtube", "id": normalized_video_id}
+        matched_item = self._tim_muc_tim_kiem_theo_id(normalized_video_id) or {}
+        self._last_play = self._tao_last_play_payload(
+            source="youtube",
+            item_id=normalized_video_id,
+            video_id=normalized_video_id,
+            title=self._chu_dau_tien(matched_item, ("title",)) or "",
+            artist=self._chu_dau_tien(matched_item, ("artist",)) or "",
+            thumbnail_url=self._chu_dau_tien(matched_item, ("thumbnail_url",)) or "",
+            duration_seconds=matched_item.get("duration_seconds"),
+        )
         self._last_play_pause_sent = "play"
         await self.coordinator.async_request_refresh()
 
@@ -908,9 +1224,138 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         """Entity service: play Zing MP3 song by song id."""
         normalized_song_id = song_id.strip()
         await self._client.async_play_zing(normalized_song_id)
-        self._last_play = {"source": "zingmp3", "id": normalized_song_id}
+        matched_item = self._tim_muc_tim_kiem_theo_id(normalized_song_id) or {}
+        self._last_play = self._tao_last_play_payload(
+            source="zingmp3",
+            item_id=normalized_song_id,
+            song_id=normalized_song_id,
+            title=self._chu_dau_tien(matched_item, ("title",)) or "",
+            artist=self._chu_dau_tien(matched_item, ("artist",)) or "",
+            thumbnail_url=self._chu_dau_tien(matched_item, ("thumbnail_url",)) or "",
+            duration_seconds=matched_item.get("duration_seconds"),
+        )
         self._last_play_pause_sent = "play"
         await self.coordinator.async_request_refresh()
+
+    async def _lam_moi_playlist_library(self) -> None:
+        """Refresh cached playlist library from device."""
+        response = await self._client.async_playlist_list()
+        self._playlist_library = self._tao_playlist_library_rut_gon(response)
+
+    async def _lam_moi_playlist_detail(self, playlist_id: str) -> None:
+        """Refresh cached playlist detail from device."""
+        if not playlist_id:
+            self._playlist_detail = {}
+            return
+        response = await self._client.async_playlist_get_songs(playlist_id)
+        self._playlist_detail = self._tao_playlist_detail_rut_gon(playlist_id, response)
+
+    async def async_playlist_list(self) -> None:
+        """Entity service: fetch playlist library."""
+        await self._lam_moi_playlist_library()
+        self.async_write_ha_state()
+
+    async def async_playlist_create(self, name: str) -> None:
+        """Entity service: create a playlist."""
+        normalized_name = name.strip()
+        response = await self._client.async_playlist_create(normalized_name)
+        self._last_playlist_event = self._tao_playlist_event_rut_gon(
+            response,
+            default_type="playlist_created",
+            playlist_name=normalized_name,
+        )
+        await self._lam_moi_playlist_library()
+        self.async_write_ha_state()
+
+    async def async_playlist_delete(self, playlist_id: int | str) -> None:
+        """Entity service: delete playlist by id."""
+        normalized_playlist_id = self._playlist_id_text(playlist_id)
+        response = await self._client.async_playlist_delete(normalized_playlist_id)
+        self._last_playlist_event = self._tao_playlist_event_rut_gon(
+            response,
+            default_type="playlist_deleted",
+            playlist_id=normalized_playlist_id,
+        )
+        await self._lam_moi_playlist_library()
+        if self._playlist_detail.get("playlist_id") == normalized_playlist_id:
+            self._playlist_detail = {}
+        self.async_write_ha_state()
+
+    async def async_playlist_get_songs(self, playlist_id: int | str) -> None:
+        """Entity service: fetch songs in one playlist."""
+        normalized_playlist_id = self._playlist_id_text(playlist_id)
+        response = await self._client.async_playlist_get_songs(normalized_playlist_id)
+        self._playlist_detail = self._tao_playlist_detail_rut_gon(normalized_playlist_id, response)
+        self.async_write_ha_state()
+
+    async def async_playlist_add_song(
+        self,
+        playlist_id: int | str,
+        source: str,
+        id: str,
+        title: str = "",
+        artist: str = "",
+        thumbnail_url: str = "",
+        duration_seconds: int = 0,
+    ) -> None:
+        """Entity service: add one track to playlist."""
+        normalized_playlist_id = self._playlist_id_text(playlist_id)
+        response = await self._client.async_playlist_add_song(
+            normalized_playlist_id,
+            source=source,
+            item_id=id,
+            title=title,
+            artist=artist,
+            thumbnail_url=thumbnail_url,
+            duration_seconds=duration_seconds,
+        )
+        self._last_playlist_event = self._tao_playlist_event_rut_gon(
+            response,
+            default_type="playlist_song_added",
+            playlist_id=normalized_playlist_id,
+        )
+        await self._lam_moi_playlist_library()
+        if self._playlist_detail.get("playlist_id") == normalized_playlist_id:
+            await self._lam_moi_playlist_detail(normalized_playlist_id)
+        self.async_write_ha_state()
+
+    async def async_playlist_remove_song(self, playlist_id: int | str, song_index: int) -> None:
+        """Entity service: remove one track from playlist."""
+        normalized_playlist_id = self._playlist_id_text(playlist_id)
+        response = await self._client.async_playlist_remove_song(
+            normalized_playlist_id,
+            song_index=song_index,
+        )
+        self._last_playlist_event = self._tao_playlist_event_rut_gon(
+            response,
+            default_type="playlist_song_removed",
+            playlist_id=normalized_playlist_id,
+        )
+        await self._lam_moi_playlist_library()
+        await self._lam_moi_playlist_detail(normalized_playlist_id)
+        self.async_write_ha_state()
+
+    async def async_playlist_play(self, playlist_id: int | str) -> None:
+        """Entity service: play one playlist by id."""
+        normalized_playlist_id = self._playlist_id_text(playlist_id)
+        response = await self._client.async_playlist_play(normalized_playlist_id)
+        playlist_name = self._chu_dau_tien(response, ("playlist_name", "name")) or ""
+        self._last_playlist_event = self._tao_playlist_event_rut_gon(
+            response,
+            default_type="playlist_play_started",
+            playlist_id=normalized_playlist_id,
+            playlist_name=playlist_name,
+        )
+        self._last_play = self._tao_last_play_payload(
+            source="youtube_playlist",
+            item_id=normalized_playlist_id,
+            playlist_id=normalized_playlist_id,
+            title=playlist_name,
+        )
+        self._last_play_pause_sent = "play"
+        await self.coordinator.async_request_refresh()
+        await self._lam_moi_playlist_detail(normalized_playlist_id)
+        self.async_write_ha_state()
 
     async def async_wake_word_set_enabled(self, enabled: bool) -> None:
         """Entity service: enable/disable wake word."""
