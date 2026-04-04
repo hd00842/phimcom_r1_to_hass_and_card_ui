@@ -32,16 +32,22 @@ Gợi ý chọn giao thức:
 Sau đó vào **Settings ->Dashboards->Resources->Add resource
 - Url nhập: /local/phicomm_r1/phicomm-r1-card.js
 - Resource type -> JavaScript module -> Save
-## 4 Tạo card trên lovelace
-Sử dụng code sau:
-```yaml
-    type: custom:phicomm-r1-card
-    entity: media_player.phimcomm_r1
-    title: Phicomm R1
+## 4. Tạo card trên Lovelace
+Sử dụng cấu hình sau:
 
-Có thể sử dụng thêm option max_height: 90vh hoặc max_height: 500px để giới hạn chiều cao của card ví dụ
 ```yaml
-    type: custom:phicomm-r1-card
-    entity: media_player.phimcomm_r1
-    title: Phicomm R1
-    max_height: 500px
+type: custom:phicomm-r1-card
+entity: media_player.phicomm_r1
+title: Phicomm R1
+```
+
+Nếu entity của bạn có tên khác thì thay `media_player.phicomm_r1` bằng đúng entity đang dùng trong Home Assistant.
+
+Bạn cũng có thể dùng thêm option `max_height` để giới hạn chiều cao của card, ví dụ:
+
+```yaml
+type: custom:phicomm-r1-card
+entity: media_player.phicomm_r1
+title: Phicomm R1
+max_height: 500px
+```
