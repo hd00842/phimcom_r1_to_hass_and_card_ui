@@ -635,14 +635,6 @@ class PhicommR1Card extends HTMLElement {
     return String(value || "").trim().toLowerCase();
   }
 
-  _suyRaNutChatTuTrangThai(value) {
-    const normalized = this._chuanHoaNhanTrangThaiChat(value);
-    if (!normalized) return null;
-    if (CHAT_ENABLED_STATES.has(normalized)) return true;
-    if (CHAT_DISABLED_STATES.has(normalized)) return false;
-    return null;
-  }
-
   _layMoTaNutChat(chatState, statusLabel) {
     const explicitText = String(chatState.button_text ?? chatState.buttonText ?? chatState.text ?? "").trim();
     if (explicitText) return explicitText;
@@ -652,11 +644,6 @@ class PhicommR1Card extends HTMLElement {
     if (CHAT_ENABLED_STATES.has(normalized)) return "Sẵn sàng nhận lệnh hoặc tin nhắn";
     if (CHAT_DISABLED_STATES.has(normalized)) return "Chat hiện chưa khả dụng";
     return "Đang chờ đồng bộ trạng thái chat";
-  }
-
-  _layMoTaTrangThaiNutChat(buttonEnabled) {
-    if (buttonEnabled === null) return "Đang chờ cập nhật";
-    return buttonEnabled ? "Nút đang sẵn sàng" : "Nút đang tắt";
   }
 
   _layNhanTrangThaiChatHienThi(value) {
@@ -2459,14 +2446,7 @@ class PhicommR1Card extends HTMLElement {
       return "unknown";
     })();
     const normalizedStatus = this._chuanHoaNhanTrangThaiChat(statusLabel);
-    const buttonEnabledRaw =
-      chatState.button_enabled ?? chatState.buttonEnabled ?? chatState.enabled ?? null;
-    const explicitButtonEnabled =
-      buttonEnabledRaw === undefined || buttonEnabledRaw === null ? null : this._epKieuBoolean(buttonEnabledRaw, false);
-    const resolvedButtonEnabled =
-      explicitButtonEnabled === null ? this._suyRaNutChatTuTrangThai(statusLabel) : explicitButtonEnabled;
     const buttonTextLabel = this._layMoTaNutChat(chatState, statusLabel);
-    const buttonStateText = this._layMoTaTrangThaiNutChat(resolvedButtonEnabled);
     const statusToneClass = (() => {
       if (CHAT_ENABLED_STATES.has(normalizedStatus)) return "is-ready";
       if (CHAT_DISABLED_STATES.has(normalizedStatus)) return "is-alert";
@@ -2516,7 +2496,6 @@ class PhicommR1Card extends HTMLElement {
             </div>
             <div class="chat-shell-tools">
               <span class="chat-shell-pill chat-state-pill ${statusToneClass}">${this._maHoaHtml(this._layNhanTrangThaiChatHienThi(statusLabel))}</span>
-              <span class="chat-shell-pill chat-meta-pill">${this._maHoaHtml(buttonStateText)}</span>
               <button id="chat-refresh" class="chat-tool-btn" title="Refresh">
                 <ha-icon icon="mdi:refresh"></ha-icon>
               </button>
@@ -3970,11 +3949,6 @@ class PhicommR1Card extends HTMLElement {
           background: rgba(96, 165, 250, 0.12);
           border-color: rgba(96, 165, 250, 0.25);
           color: #c8d9ff;
-        }
-
-        .chat-meta-pill {
-          color: var(--muted);
-          font-weight: 600;
         }
 
         .chat-tool-btn {
