@@ -20,7 +20,8 @@ const CHAT_DISABLED_STATES = new Set([
   "disconnected",
 ]);
 const CHAT_SESSION_STATES = new Set(["connecting", "listening", "thinking", "speaking"]);
-const NOW_PLAYING_FALLBACK_WINDOW_MS = 8000;
+const NOW_PLAYING_FALLBACK_WINDOW_MS = 1800;
+const TRACK_SWITCH_GUARD_MS = 5000;
 
 class PhicommR1Card extends HTMLElement {
   constructor() {
@@ -41,6 +42,7 @@ class PhicommR1Card extends HTMLElement {
     this._mediaDangCompose = false;
     this._mediaTimKiemSauCompose = false;
     this._mediaQueryFocused = false;
+    this._pendingTextFocusId = "";
 
     this._volumeLevel = 0;
     this._wakeSensitivity = 0.9;
@@ -87,10 +89,22 @@ class PhicommR1Card extends HTMLElement {
     this._liveDurationSeconds = 0;
     this._livePlaying = false;
     this._liveTickAt = 0;
+    this._draggingPlayback = false;
+    this._pendingSeekUntil = 0;
+    this._pendingSeekTrackKey = "";
+    this._pendingSeekPositionSeconds = 0;
+    this._pendingTrackSwitchUntil = 0;
+    this._pendingTrackSwitchTrackKey = "";
+    this._pendingTrackSwitchPreviousTrackKey = "";
+    this._pendingTrackSwitchStartedAt = 0;
+    this._pendingTrackSwitchPositionSeconds = 0;
     this._nowPlayingCache = this._taoNowPlayingCache();
     this._forcePauseUntil = 0;
+    this._forceStopUntil = 0;
     this._optimisticPlayUntil = 0;
-    this._pendingSwitches = {};
+    this._pendingControls = {};
+    this._scrollGuardUntil = 0;
+    this._scrollGuardTimerId = null;
     this._lastChatStateRequestAt = 0;
     this._lastChatHistoryRequestAt = 0;
     this._lastControlStateRequestAt = 0;
@@ -139,10 +153,21 @@ class PhicommR1Card extends HTMLElement {
     this._liveDurationSeconds = 0;
     this._livePlaying = false;
     this._liveTickAt = 0;
+    this._draggingPlayback = false;
+    this._pendingSeekUntil = 0;
+    this._pendingSeekTrackKey = "";
+    this._pendingSeekPositionSeconds = 0;
+    this._pendingTrackSwitchUntil = 0;
+    this._pendingTrackSwitchTrackKey = "";
+    this._pendingTrackSwitchPreviousTrackKey = "";
+    this._pendingTrackSwitchStartedAt = 0;
+    this._pendingTrackSwitchPositionSeconds = 0;
     this._nowPlayingCache = this._taoNowPlayingCache();
     this._forcePauseUntil = 0;
+    this._forceStopUntil = 0;
     this._optimisticPlayUntil = 0;
-    this._pendingSwitches = {};
+    this._pendingControls = {};
+    this._xoaCanhGacScroll();
     this._lastChatStateRequestAt = 0;
     this._lastChatHistoryRequestAt = 0;
     this._lastControlStateRequestAt = 0;
@@ -153,6 +178,7 @@ class PhicommR1Card extends HTMLElement {
     this._mediaDangCompose = false;
     this._mediaTimKiemSauCompose = false;
     this._mediaQueryFocused = false;
+    this._pendingTextFocusId = "";
     this._eqBandCount = EQ_BAND_LABELS.length;
     this._eqBands = [0, 0, 0, 0, 0];
     this._eqBand = 0;
@@ -216,39 +242,21 @@ class PhicommR1Card extends HTMLElement {
       this._capNhatEqGiaoDien(this.shadowRoot);
       return;
     }
+    if (this._dangCuonNoiBo()) {
+      this._pendingRender = true;
+      return;
+    }
     if (this._dangSuaOInputVanBan()) {
-      const activeId = this.shadowRoot?.activeElement?.id || "";
-      if (activeId === "media-query" && this._activeTab === "media") {
-        if (this._dangChoKetQuaTimKiem) {
-          const cho = this._timKiemDangCho;
-          const daCoKetQuaMoi = cho
-            ? this._laKetQuaTimKiemMoi(
-                this._thuocTinh().last_music_search || {},
-                cho.query,
-                cho.source,
-                cho.mocTruoc,
-                cho.dauVetTruoc
-              )
-            : false;
-          if (daCoKetQuaMoi) {
-            this._pendingRender = false;
-            this._veGiaoDienGiuFocusTimKiem();
-          } else {
-            this._pendingRender = true;
-          }
-          return;
+      const activeId = this._layInputVanBanDangFocus()?.id || "";
+      const editingId = activeId || this._pendingTextFocusId || "";
+      const shouldImmediateRender = this._coNenRenderNgayKhiDangSuaInput(editingId, {
+        changed,
+        searchChanged,
+      });
+      if (shouldImmediateRender && editingId === "media-query") {
+        if (!this._veGiaoDienGiuFocusTimKiem()) {
+          this._pendingRender = true;
         }
-        // Search completed but state changed (e.g. results arrived late) –
-        // render with focus preservation so results appear immediately.
-        if (changed || searchChanged) {
-          this._pendingRender = false;
-          this._veGiaoDienGiuFocusTimKiem();
-          return;
-        }
-      }
-      if (activeId === "chat-input" && this._activeTab === "chat") {
-        this._pendingRender = false;
-        this._veGiaoDienGiuFocusChat();
         return;
       }
       this._pendingRender = true;
@@ -265,6 +273,7 @@ class PhicommR1Card extends HTMLElement {
 
   disconnectedCallback() {
     this._xoaHenGioTienDo();
+    this._xoaCanhGacScroll();
   }
 
   _doiTuongTrangThai() {
@@ -433,15 +442,130 @@ class PhicommR1Card extends HTMLElement {
   }
 
   _dangFocusTimKiem() {
+    return this._mediaQueryFocused || this._layInputVanBanDangFocus()?.id === "media-query";
+  }
+
+  _laInputVanBanCoTheChinhSua(element) {
+    if (!element) return false;
+    const tagName = String(element.tagName || "").toLowerCase();
+    if (tagName === "textarea") return true;
+    if (tagName !== "input") return false;
+    const type = String(element.type || "text").toLowerCase();
+    return ["text", "search", "email", "url", "tel", "password"].includes(type);
+  }
+
+  _layInputVanBanDangFocus() {
     const active = this.shadowRoot?.activeElement;
-    return this._mediaQueryFocused || active?.id === "media-query";
+    return this._laInputVanBanCoTheChinhSua(active) ? active : null;
+  }
+
+  _laySnapshotInputVanBan(preferredId = "") {
+    const active = this._layInputVanBanDangFocus();
+    const fallbackId = preferredId || this._pendingTextFocusId || "";
+    if (active && (!fallbackId || active.id === fallbackId)) {
+      return {
+        id: active.id,
+        selectionStart: active.selectionStart ?? active.value.length,
+        selectionEnd: active.selectionEnd ?? active.value.length,
+        shouldRestoreFocus: true,
+        pendingOnly: false,
+      };
+    }
+    if (!fallbackId) return null;
+    const input = this.shadowRoot?.getElementById(fallbackId);
+    if (!this._laInputVanBanCoTheChinhSua(input)) {
+      return {
+        id: fallbackId,
+        selectionStart: 0,
+        selectionEnd: 0,
+        shouldRestoreFocus: false,
+        pendingOnly: true,
+      };
+    }
+    const doDai = input.value?.length ?? 0;
+    return {
+      id: fallbackId,
+      selectionStart: input.selectionStart ?? doDai,
+      selectionEnd: input.selectionEnd ?? doDai,
+      shouldRestoreFocus: false,
+      pendingOnly: true,
+    };
+  }
+
+  _phucHoiFocusInputVanBan(snapshot) {
+    if (!snapshot?.shouldRestoreFocus || !snapshot.id) return false;
+    if (snapshot.id === "media-query" && this._mediaDangCompose) return false;
+    const input = this.shadowRoot?.getElementById(snapshot.id);
+    if (!this._laInputVanBanCoTheChinhSua(input)) {
+      if (this._pendingTextFocusId === snapshot.id) {
+        this._pendingTextFocusId = "";
+      }
+      return false;
+    }
+    input.focus();
+    const doDai = input.value.length;
+    const batDau = Math.max(0, Math.min(doDai, Number(snapshot.selectionStart)));
+    const ketThuc = Math.max(batDau, Math.min(doDai, Number(snapshot.selectionEnd)));
+    input.setSelectionRange(batDau, ketThuc);
+    return true;
+  }
+
+  _batDauChoFocusInputVanBan(id) {
+    if (!id) return;
+    this._pendingTextFocusId = id;
+  }
+
+  _xacNhanFocusInputVanBan(id) {
+    if (!id) return;
+    if (this._pendingTextFocusId === id) {
+      this._pendingTextFocusId = "";
+    }
+  }
+
+  _xoaChoFocusInputVanBan(id = "") {
+    if (!id || this._pendingTextFocusId === id) {
+      this._pendingTextFocusId = "";
+    }
+  }
+
+  _lamSachChoFocusInputVanBanSauRender() {
+    if (this._pendingTextFocusId) {
+      const input = this.shadowRoot?.getElementById(this._pendingTextFocusId);
+      if (!this._laInputVanBanCoTheChinhSua(input)) {
+        this._pendingTextFocusId = "";
+      }
+    }
+    if (!this.shadowRoot?.getElementById("media-query")) {
+      this._mediaQueryFocused = false;
+    }
+  }
+
+  _coNenRenderNgayKhiDangNhapTimKiem({ searchChanged = false } = {}) {
+    if (this._mediaDangCompose) return false;
+    const search = this._thuocTinh().last_music_search || {};
+    if (this._dangChoKetQuaTimKiem) {
+      const cho = this._timKiemDangCho;
+      return Boolean(
+        searchChanged &&
+        cho &&
+        this._laKetQuaTimKiemMoi(search, cho.query, cho.source, cho.mocTruoc, cho.dauVetTruoc)
+      );
+    }
+    if (!searchChanged) return false;
+    const source = this._nguonKetQuaTheoTab(this._mediaSearchTab);
+    return this._ketQuaTimKiemKhopYeuCau(search, this._query, source);
+  }
+
+  _coNenRenderNgayKhiDangSuaInput(editingId, flags = {}) {
+    if (!editingId) return false;
+    if (editingId === "media-query" && this._activeTab === "media") {
+      return this._coNenRenderNgayKhiDangNhapTimKiem(flags);
+    }
+    return false;
   }
 
   _dangSuaOInputVanBan() {
-    const active = this.shadowRoot?.activeElement;
-    if (this._mediaQueryFocused) return true;
-    if (!active) return false;
-    return active.id === "media-query" || active.id === "chat-input";
+    return Boolean(this._layInputVanBanDangFocus() || this._pendingTextFocusId || this._mediaQueryFocused);
   }
 
   _dangTuongTacEq() {
@@ -449,67 +573,115 @@ class PhicommR1Card extends HTMLElement {
     return Boolean(active?.dataset?.eqBand !== undefined);
   }
 
+  _dangCuonNoiBo() {
+    return Date.now() < this._scrollGuardUntil;
+  }
+
+  _xoaCanhGacScroll() {
+    if (this._scrollGuardTimerId) {
+      clearTimeout(this._scrollGuardTimerId);
+      this._scrollGuardTimerId = null;
+    }
+    this._scrollGuardUntil = 0;
+  }
+
+  _batDauCanhGacScroll(ttlMs = 220) {
+    const ttl = Math.max(120, Math.round(Number(ttlMs) || 220));
+    this._scrollGuardUntil = Date.now() + ttl;
+    if (this._scrollGuardTimerId) {
+      clearTimeout(this._scrollGuardTimerId);
+    }
+    this._scrollGuardTimerId = setTimeout(() => {
+      this._scrollGuardTimerId = null;
+      this._scrollGuardUntil = 0;
+      this._xuLyRenderCho();
+    }, ttl + 40);
+  }
+
+  _taoSnapshotViTriCuon() {
+    const root = this.shadowRoot;
+    if (!root) return null;
+
+    const entries = [];
+    const thuThap = (selector) => {
+      const element = root.querySelector(selector);
+      if (!element) return;
+      entries.push({
+        selector,
+        top: Number(element.scrollTop) || 0,
+      });
+    };
+
+    thuThap(".card-body");
+    if (this._activeTab === "media") {
+      thuThap(".panel-media .results");
+    }
+    if (this._activeTab === "chat") {
+      thuThap(".chat-shell-history");
+    }
+
+    if (entries.length === 0) return null;
+    return {
+      tab: this._activeTab,
+      entries,
+    };
+  }
+
+  _phucHoiViTriCuon(snapshot) {
+    if (!snapshot?.entries?.length) return;
+    const targetTab = snapshot.tab;
+    requestAnimationFrame(() => {
+      if (!this.shadowRoot || this._activeTab !== targetTab) return;
+      for (const entry of snapshot.entries) {
+        const element = this.shadowRoot.querySelector(entry.selector);
+        if (!element) continue;
+        const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+        const targetTop = Math.max(0, Math.min(Number(entry.top) || 0, maxScrollTop));
+        if (Math.abs((Number(element.scrollTop) || 0) - targetTop) > 1) {
+          element.scrollTop = targetTop;
+        }
+      }
+    });
+  }
+
   _xuLyRenderCho() {
     if (!this._pendingRender) return;
     if (this._dangSuaOInputVanBan()) return;
+    if (this._dangCuonNoiBo()) return;
     this._pendingRender = false;
     this._veGiaoDien();
   }
 
   _veGiaoDienGiuFocusTimKiem() {
-    const root = this.shadowRoot;
-    const input = root?.getElementById("media-query");
-    const dangFocus = this._dangFocusTimKiem() && Boolean(input);
-    const viTriBatDau = dangFocus ? input.selectionStart ?? input.value.length : 0;
-    const viTriKetThuc = dangFocus ? input.selectionEnd ?? input.value.length : viTriBatDau;
-
-    this._pendingRender = false;
-    this._veGiaoDien();
-
-    if (!dangFocus) return;
-    const inputMoi = this.shadowRoot?.getElementById("media-query");
-    if (!inputMoi) return;
-    inputMoi.focus();
-    const doDai = inputMoi.value.length;
-    const batDau = Math.max(0, Math.min(doDai, Number(viTriBatDau)));
-    const ketThuc = Math.max(batDau, Math.min(doDai, Number(viTriKetThuc)));
-    inputMoi.setSelectionRange(batDau, ketThuc);
+    return this._veGiaoDienGiuFocusInputVanBan("media-query");
   }
 
   _giuFocusTimKiemKhongRender() {
-    if (!this._dangFocusTimKiem()) return;
-    const input = this.shadowRoot?.getElementById("media-query");
-    if (!input) return;
-    const viTriBatDau = input.selectionStart ?? input.value.length;
-    const viTriKetThuc = input.selectionEnd ?? input.value.length;
-    requestAnimationFrame(() => {
-      const inputMoi = this.shadowRoot?.getElementById("media-query");
-      if (!inputMoi) return;
-      inputMoi.focus();
-      const doDai = inputMoi.value.length;
-      const batDau = Math.max(0, Math.min(doDai, Number(viTriBatDau)));
-      const ketThuc = Math.max(batDau, Math.min(doDai, Number(viTriKetThuc)));
-      inputMoi.setSelectionRange(batDau, ketThuc);
-    });
+    this._giuFocusInputVanBanKhongRender("media-query");
   }
 
   _veGiaoDienGiuFocusChat() {
-    const root = this.shadowRoot;
-    const input = root?.getElementById("chat-input");
-    const dangFocus = Boolean(input && root.activeElement === input);
-    const viTriBatDau = dangFocus ? input.selectionStart ?? input.value.length : 0;
-    const viTriKetThuc = dangFocus ? input.selectionEnd ?? input.value.length : viTriBatDau;
+    return this._veGiaoDienGiuFocusInputVanBan("chat-input");
+  }
 
+  _veGiaoDienGiuFocusInputVanBan(preferredId = "") {
+    const snapshot = this._laySnapshotInputVanBan(preferredId);
+    if (snapshot?.pendingOnly) {
+      return false;
+    }
     this._pendingRender = false;
     this._veGiaoDien();
+    return this._phucHoiFocusInputVanBan(snapshot);
+  }
 
-    const inputMoi = this.shadowRoot?.getElementById("chat-input");
-    if (!inputMoi) return;
-    inputMoi.focus();
-    const doDai = inputMoi.value.length;
-    const batDau = Math.max(0, Math.min(doDai, Number(viTriBatDau)));
-    const ketThuc = Math.max(batDau, Math.min(doDai, Number(viTriKetThuc)));
-    inputMoi.setSelectionRange(batDau, ketThuc);
+  _giuFocusInputVanBanKhongRender(preferredId = "") {
+    const snapshot = this._laySnapshotInputVanBan(preferredId);
+    if (!snapshot || snapshot.pendingOnly) return;
+    requestAnimationFrame(() => {
+      const active = this._layInputVanBanDangFocus();
+      if (active?.id === snapshot.id) return;
+      this._phucHoiFocusInputVanBan(snapshot);
+    });
   }
 
   _layGiaTriChatInput() {
@@ -608,6 +780,68 @@ class PhicommR1Card extends HTMLElement {
       ids.push(text);
       return ids;
     }, []);
+  }
+
+  _taoUngVienPhatMuc(item, source) {
+    if (!item || typeof item !== "object") return null;
+    const normalizedSource = String(source || item.source || "").trim().toLowerCase();
+    const isPlaylist = this._laMucPlaylist(item, normalizedSource);
+    const sourceName = isPlaylist
+      ? "youtube_playlist"
+      : normalizedSource.includes("zing")
+        ? "zingmp3"
+        : "youtube";
+    const playlistId = isPlaylist
+      ? this._chuoiKhongRongDauTien(item.playlist_id, item.playlistId, item.id)
+      : "";
+    const trackId = isPlaylist
+      ? ""
+      : sourceName === "zingmp3"
+        ? this._chuoiKhongRongDauTien(item.song_id, item.songId, item.id)
+        : this._chuoiKhongRongDauTien(item.video_id, item.videoId, item.id);
+    const title = this._chuoiKhongRongDauTien(item.title, item.name);
+    const artist = this._chuoiKhongRongDauTien(item.artist, item.channel, item.author);
+    const duration = this._epKieuGiayPhat(
+      item.duration_seconds ?? item.duration ?? item.media_duration,
+      0
+    );
+    const thumbnailUrl = this._chuoiKhongRongDauTien(
+      item.thumbnail_url,
+      item.thumbnail,
+      item.image,
+      item.cover
+    );
+    const trackKey = this._chuoiKhongRongDauTien(
+      trackId ? `track:${trackId}` : "",
+      playlistId && title ? `playlist:${playlistId}|${title}` : "",
+      sourceName && title ? `${sourceName}|${title}|${artist}|${duration}` : "",
+      playlistId ? `playlist:${playlistId}` : ""
+    );
+    const service = isPlaylist
+      ? "playlist_play"
+      : sourceName === "zingmp3"
+        ? "play_zing"
+        : "play_youtube";
+    const serviceData = isPlaylist
+      ? { playlist_id: playlistId }
+      : sourceName === "zingmp3"
+        ? { song_id: trackId }
+        : { video_id: trackId };
+
+    return {
+      isPlaylist,
+      source: sourceName,
+      playlistId,
+      trackId,
+      title,
+      artist,
+      duration,
+      thumbnail_url: thumbnailUrl,
+      trackKey,
+      service,
+      serviceData,
+      playable: isPlaylist ? Boolean(playlistId) : Boolean(trackId),
+    };
   }
 
   _epKieuBoolean(value, fallback = false) {
@@ -871,40 +1105,65 @@ class PhicommR1Card extends HTMLElement {
     return this._epKieuBoolean(normalized, fallback);
   }
 
-  _datCongTacCho(key, desired, ttlMs = 5000) {
-    this._pendingSwitches[key] = {
-      value: Boolean(desired),
-      expiresAt: Date.now() + ttlMs,
+  _datDieuKhienCho(key, value, ttlMs = 5000) {
+    this._pendingControls[key] = {
+      value,
+      expiresAt: Number.isFinite(ttlMs) ? Date.now() + ttlMs : Number.POSITIVE_INFINITY,
     };
   }
 
-  _xoaCongTacCho(key) {
-    delete this._pendingSwitches[key];
+  _xoaDieuKhienCho(key) {
+    delete this._pendingControls[key];
   }
 
-  _layTrangThaiCongTac(key, deviceValue) {
-    const resolvedDevice = Boolean(deviceValue);
-    const pending = this._pendingSwitches[key];
-    if (!pending) return resolvedDevice;
+  _layDieuKhienDangCho(key) {
+    const pending = this._pendingControls[key];
+    if (!pending) return null;
     if (Date.now() > pending.expiresAt) {
-      this._xoaCongTacCho(key);
-      return resolvedDevice;
+      this._xoaDieuKhienCho(key);
+      return null;
     }
-    if (resolvedDevice === pending.value) {
-      this._xoaCongTacCho(key);
-      return resolvedDevice;
+    return pending;
+  }
+
+  _layGiaTriDieuKhien(
+    key,
+    deviceValue,
+    { hasDeviceValue = true, comparator = (device, pending) => Object.is(device, pending) } = {}
+  ) {
+    const pending = this._layDieuKhienDangCho(key);
+    if (!pending) return deviceValue;
+    if (!hasDeviceValue) return pending.value;
+    if (comparator(deviceValue, pending.value)) {
+      this._xoaDieuKhienCho(key);
+      return deviceValue;
     }
     return pending.value;
   }
 
+  _coDieuKhienDangCho(key) {
+    return Boolean(this._layDieuKhienDangCho(key));
+  }
+
+  _datCongTacCho(key, desired, ttlMs = 5000) {
+    this._datDieuKhienCho(key, Boolean(desired), ttlMs);
+  }
+
+  _xoaCongTacCho(key) {
+    this._xoaDieuKhienCho(key);
+  }
+
+  _layTrangThaiCongTac(key, deviceValue, hasDeviceValue = true) {
+    return Boolean(
+      this._layGiaTriDieuKhien(key, Boolean(deviceValue), {
+        hasDeviceValue,
+        comparator: (device, pending) => Boolean(device) === Boolean(pending),
+      })
+    );
+  }
+
   _laCongTacDangCho(key) {
-    const pending = this._pendingSwitches[key];
-    if (!pending) return false;
-    if (Date.now() > pending.expiresAt) {
-      this._xoaCongTacCho(key);
-      return false;
-    }
-    return true;
+    return this._coDieuKhienDangCho(key);
   }
 
   _dongBoTuEntity() {
@@ -927,12 +1186,13 @@ class PhicommR1Card extends HTMLElement {
       this._wakeSensitivity = Math.max(0, Math.min(1, sensitivity));
     }
 
-    const wakeEnabled = this._epKieuBoolean(
-      wake.enabled ?? wake.enable ?? wake.state,
-      this._wakeEnabled
-    );
+    const wakeRaw = wake.enabled ?? wake.enable ?? wake.state;
+    const hasWakeEnabled = wakeRaw !== undefined && wakeRaw !== null;
+    const wakeEnabled = this._epKieuBoolean(wakeRaw, this._wakeEnabled);
+    const antiDeafRaw = ai.enabled ?? ai.enable ?? ai.state;
+    const hasAntiDeafEnabled = antiDeafRaw !== undefined && antiDeafRaw !== null;
     const antiDeafEnabled = this._epKieuBoolean(
-      ai.enabled ?? ai.enable ?? ai.state,
+      antiDeafRaw,
       this._antiDeafEnabled
     );
     const dlnaRaw =
@@ -941,48 +1201,108 @@ class PhicommR1Card extends HTMLElement {
       attrs.dlna ??
       attrs.dlna_enabled ??
       attrs.dlnaEnabled;
+    const hasDlnaEnabled = dlnaRaw !== undefined && dlnaRaw !== null;
     const airplayRaw =
       attrs.airplay_open ??
       attrs.airplayOpen ??
       attrs.airplay ??
       attrs.airplay_enabled ??
       attrs.airplayEnabled;
+    const hasAirplayEnabled = airplayRaw !== undefined && airplayRaw !== null;
     const bluetoothRaw =
       attrs.device_state ??
       attrs.deviceState ??
       attrs.bluetooth_state ??
       attrs.bluetoothState;
+    const hasBluetoothEnabled = bluetoothRaw !== undefined && bluetoothRaw !== null;
     const mainLightRaw =
       attrs.music_light_enable ??
       attrs.musicLightEnable ??
       attrs.main_light_enabled ??
       attrs.mainLightEnabled;
+    const hasMainLightEnabled = mainLightRaw !== undefined && mainLightRaw !== null;
 
     const dlnaEnabled = this._epKieuBoolean(dlnaRaw, this._dlnaEnabled);
     const airplayEnabled = this._epKieuBoolean(airplayRaw, this._airplayEnabled);
     const bluetoothEnabled = this._laBluetoothDangBat(bluetoothRaw, this._bluetoothEnabled);
     const mainLightEnabled = this._epKieuBoolean(mainLightRaw, this._mainLightEnabled);
 
-    this._wakeEnabled = this._layTrangThaiCongTac("wake_enabled", wakeEnabled);
-    this._antiDeafEnabled = this._layTrangThaiCongTac("anti_deaf_enabled", antiDeafEnabled);
-    this._dlnaEnabled = this._layTrangThaiCongTac("dlna_enabled", dlnaEnabled);
-    this._airplayEnabled = this._layTrangThaiCongTac("airplay_enabled", airplayEnabled);
-    this._bluetoothEnabled = this._layTrangThaiCongTac("bluetooth_enabled", bluetoothEnabled);
-    this._mainLightEnabled = this._layTrangThaiCongTac("main_light_enabled", mainLightEnabled);
-
-    if (typeof attrs.music_light_luma === "number") {
-      this._mainLightBrightness = Math.max(1, Math.min(200, attrs.music_light_luma));
-    }
-    if (typeof attrs.music_light_chroma === "number") {
-      this._mainLightSpeed = Math.max(1, Math.min(100, attrs.music_light_chroma));
-    }
-
-    const mainLightMode = this._epKieuSo(
-      attrs.music_light_mode ?? attrs.musicLightMode,
-      this._mainLightMode
+    this._wakeEnabled = this._layTrangThaiCongTac("wake_enabled", wakeEnabled, hasWakeEnabled);
+    this._antiDeafEnabled = this._layTrangThaiCongTac(
+      "anti_deaf_enabled",
+      antiDeafEnabled,
+      hasAntiDeafEnabled
     );
-    if (Number.isFinite(mainLightMode)) {
-      this._mainLightMode = Math.max(0, Math.round(mainLightMode));
+    this._dlnaEnabled = this._layTrangThaiCongTac("dlna_enabled", dlnaEnabled, hasDlnaEnabled);
+    this._airplayEnabled = this._layTrangThaiCongTac(
+      "airplay_enabled",
+      airplayEnabled,
+      hasAirplayEnabled
+    );
+    this._bluetoothEnabled = this._layTrangThaiCongTac(
+      "bluetooth_enabled",
+      bluetoothEnabled,
+      hasBluetoothEnabled
+    );
+    this._mainLightEnabled = this._layTrangThaiCongTac(
+      "main_light_enabled",
+      mainLightEnabled,
+      hasMainLightEnabled
+    );
+
+    const mainBrightnessRaw = attrs.music_light_luma ?? attrs.musicLightLuma;
+    const parsedMainBrightness = this._epKieuSo(mainBrightnessRaw, Number.NaN);
+    const hasMainBrightness = Number.isFinite(parsedMainBrightness);
+    const resolvedMainBrightness = this._layGiaTriDieuKhien(
+      "main_light_brightness",
+      hasMainBrightness
+        ? Math.max(1, Math.min(200, Math.round(parsedMainBrightness)))
+        : this._mainLightBrightness,
+      {
+        hasDeviceValue: hasMainBrightness,
+        comparator: (device, pending) => Number(device) === Number(pending),
+      }
+    );
+    if (Number.isFinite(Number(resolvedMainBrightness))) {
+      this._mainLightBrightness = Math.max(
+        1,
+        Math.min(200, Math.round(Number(resolvedMainBrightness)))
+      );
+    }
+
+    const mainSpeedRaw = attrs.music_light_chroma ?? attrs.musicLightChroma;
+    const parsedMainSpeed = this._epKieuSo(mainSpeedRaw, Number.NaN);
+    const hasMainSpeed = Number.isFinite(parsedMainSpeed);
+    const resolvedMainSpeed = this._layGiaTriDieuKhien(
+      "main_light_speed",
+      hasMainSpeed
+        ? Math.max(1, Math.min(100, Math.round(parsedMainSpeed)))
+        : this._mainLightSpeed,
+      {
+        hasDeviceValue: hasMainSpeed,
+        comparator: (device, pending) => Number(device) === Number(pending),
+      }
+    );
+    if (Number.isFinite(Number(resolvedMainSpeed))) {
+      this._mainLightSpeed = Math.max(
+        1,
+        Math.min(100, Math.round(Number(resolvedMainSpeed)))
+      );
+    }
+
+    const mainLightModeRaw = attrs.music_light_mode ?? attrs.musicLightMode;
+    const parsedMainLightMode = this._epKieuSo(mainLightModeRaw, Number.NaN);
+    const hasMainLightMode = Number.isFinite(parsedMainLightMode);
+    const resolvedMainLightMode = this._layGiaTriDieuKhien(
+      "main_light_mode",
+      hasMainLightMode ? Math.max(0, Math.round(parsedMainLightMode)) : this._mainLightMode,
+      {
+        hasDeviceValue: hasMainLightMode,
+        comparator: (device, pending) => Number(device) === Number(pending),
+      }
+    );
+    if (Number.isFinite(Number(resolvedMainLightMode))) {
+      this._mainLightMode = Math.max(0, Math.round(Number(resolvedMainLightMode)));
     }
 
     const audioConfig = attrs.audio_config || attrs.audioConfig || {};
@@ -1066,16 +1386,31 @@ class PhicommR1Card extends HTMLElement {
       this._loudnessGain = Math.max(-3000, Math.min(3000, Math.round(loudnessGain)));
     }
 
-    this._edgeLightEnabled = this._epKieuBoolean(
-      edgeLight.enabled ?? edgeLight.enable ?? edgeLight.state,
-      this._edgeLightEnabled
+    const edgeEnabledRaw = edgeLight.enabled ?? edgeLight.enable ?? edgeLight.state;
+    const hasEdgeEnabled = edgeEnabledRaw !== undefined && edgeEnabledRaw !== null;
+    this._edgeLightEnabled = this._layTrangThaiCongTac(
+      "edge_light_enabled",
+      this._epKieuBoolean(edgeEnabledRaw, this._edgeLightEnabled),
+      hasEdgeEnabled
     );
-    const edgeIntensity = this._epKieuSo(
-      edgeLight.intensity ?? edgeLight.value,
-      this._edgeLightIntensity
+    const edgeIntensityRaw = edgeLight.intensity ?? edgeLight.value;
+    const parsedEdgeIntensity = this._epKieuSo(edgeIntensityRaw, Number.NaN);
+    const hasEdgeIntensity = Number.isFinite(parsedEdgeIntensity);
+    const resolvedEdgeIntensity = this._layGiaTriDieuKhien(
+      "edge_light_intensity",
+      hasEdgeIntensity
+        ? Math.max(0, Math.min(100, Math.round(parsedEdgeIntensity)))
+        : this._edgeLightIntensity,
+      {
+        hasDeviceValue: hasEdgeIntensity,
+        comparator: (device, pending) => Number(device) === Number(pending),
+      }
     );
-    if (Number.isFinite(edgeIntensity)) {
-      this._edgeLightIntensity = Math.max(0, Math.min(100, Math.round(edgeIntensity)));
+    if (Number.isFinite(Number(resolvedEdgeIntensity))) {
+      this._edgeLightIntensity = Math.max(
+        0,
+        Math.min(100, Math.round(Number(resolvedEdgeIntensity)))
+      );
     }
 
     this._dongBoLichSuChatTuEntity(attrs.last_chat_items);
@@ -1440,6 +1775,28 @@ class PhicommR1Card extends HTMLElement {
     return "";
   }
 
+  _giaiMaTrangThaiAibox(aibox = {}) {
+    if (!aibox || typeof aibox !== "object") return "";
+    const explicitState = this._giaiMaTrangThaiPhat(
+      aibox.is_playing,
+      aibox.isPlaying,
+      aibox.playing,
+      aibox.play_state,
+      aibox.playState,
+      aibox.playStatus,
+      aibox.play_status,
+      aibox.playerState,
+      aibox.player_state,
+      aibox.playbackState,
+      aibox.playback_state
+    );
+    if (explicitState) return explicitState;
+    return this._giaiMaTrangThaiPhat(
+      aibox.state,
+      aibox.status
+    );
+  }
+
   _xoaHenGioTienDo() {
     if (this._progressTimerId === null) return;
     clearInterval(this._progressTimerId);
@@ -1450,7 +1807,7 @@ class PhicommR1Card extends HTMLElement {
     if (this._progressTimerId !== null) return;
     this._progressTimerId = window.setInterval(() => {
       this._xuLyNhipHenGioTienDo();
-    }, 1000);
+    }, 250);
   }
 
   _capNhatHenGioTienDo() {
@@ -1462,12 +1819,91 @@ class PhicommR1Card extends HTMLElement {
     }
   }
 
-  _dongBoTienDoTrucTiep(trackKey, positionSeconds, durationSeconds, isPlaying) {
+  _xoaCanhGacChuyenBai() {
+    this._pendingTrackSwitchUntil = 0;
+    this._pendingTrackSwitchTrackKey = "";
+    this._pendingTrackSwitchPreviousTrackKey = "";
+    this._pendingTrackSwitchStartedAt = 0;
+    this._pendingTrackSwitchPositionSeconds = 0;
+  }
+
+  _nenBoQuaTinHieuChuyenBai(trackKey, positionSeconds) {
+    if (!this._pendingTrackSwitchTrackKey) return false;
+    if (Date.now() >= this._pendingTrackSwitchUntil) {
+      this._xoaCanhGacChuyenBai();
+      return false;
+    }
+
+    const key = String(trackKey || "").trim();
+    if (!key) return true;
+
+    const expectedKey = this._pendingTrackSwitchTrackKey;
+    const previousKey = this._pendingTrackSwitchPreviousTrackKey;
+    if (previousKey && key === previousKey && key !== expectedKey) {
+      return true;
+    }
+    if (key !== expectedKey) {
+      return false;
+    }
+
+    const elapsed = Math.max(
+      0,
+      (performance.now() - this._pendingTrackSwitchStartedAt) / 1000
+    );
+    const allowedPosition = this._pendingTrackSwitchPositionSeconds + elapsed + 2.5;
+    const incomingPosition = Number(positionSeconds);
+    return Number.isFinite(incomingPosition) && incomingPosition > allowedPosition;
+  }
+
+  _apDungChuyenBaiCucBo(candidate, { rerender = false } = {}) {
+    if (!candidate?.trackKey) return;
     const now = Date.now();
+    const tick = performance.now();
+    const previousTrackKey = this._liveTrackKey;
+
+    this._lastPlayPauseSent = "play";
+    this._forcePauseUntil = 0;
+    this._forceStopUntil = 0;
+    this._optimisticPlayUntil = now + 5000;
+    this._draggingPlayback = false;
+    this._pendingSeekUntil = 0;
+    this._pendingSeekTrackKey = "";
+    this._pendingSeekPositionSeconds = 0;
+    this._pendingTrackSwitchUntil = now + TRACK_SWITCH_GUARD_MS;
+    this._pendingTrackSwitchTrackKey = candidate.trackKey;
+    this._pendingTrackSwitchPreviousTrackKey = previousTrackKey;
+    this._pendingTrackSwitchStartedAt = tick;
+    this._pendingTrackSwitchPositionSeconds = 0;
+    this._liveTrackKey = candidate.trackKey;
+    this._livePositionSeconds = 0;
+    this._liveDurationSeconds = candidate.duration;
+    this._livePlaying = true;
+    this._liveTickAt = tick;
+    this._nowPlayingCache = {
+      trackKey: candidate.trackKey,
+      trackId: candidate.trackId,
+      playlistId: candidate.playlistId,
+      title: candidate.title,
+      artist: candidate.artist,
+      source: candidate.source,
+      thumbnail_url: candidate.thumbnail_url,
+      duration: candidate.duration,
+    };
+    this._dongBoTienDoDom();
+    this._capNhatHenGioTienDo();
+    if (rerender) {
+      this._veGiaoDien();
+    }
+  }
+
+  _dongBoTienDoTrucTiep(trackKey, positionSeconds, durationSeconds, isPlaying) {
+    const now = performance.now();
     const posRaw = Number.isFinite(Number(positionSeconds)) ? Math.max(0, Number(positionSeconds)) : 0;
     const dur = Number.isFinite(Number(durationSeconds)) ? Math.max(0, Number(durationSeconds)) : 0;
     const pos = dur > 0 ? Math.min(posRaw, dur) : posRaw;
     const sameTrack = Boolean(trackKey) && trackKey === this._liveTrackKey;
+    const wasPlaying = this._livePlaying;
+    let acceptedPosition = false;
 
     if (!trackKey && !isPlaying && pos <= 0 && dur <= 0) {
       this._liveTrackKey = "";
@@ -1475,30 +1911,79 @@ class PhicommR1Card extends HTMLElement {
       this._liveDurationSeconds = 0;
       this._livePlaying = false;
       this._liveTickAt = now;
+      this._pendingSeekUntil = 0;
+      this._pendingSeekTrackKey = "";
+      this._pendingSeekPositionSeconds = 0;
       return;
     }
 
+    if (this._nenBoQuaTinHieuChuyenBai(trackKey, pos)) {
+      if (isPlaying) {
+        this._livePlaying = true;
+      }
+      if (this._liveTickAt <= 0) {
+        this._liveTickAt = now;
+      }
+      return;
+    }
+
+    if (this._draggingPlayback && sameTrack) {
+      this._liveDurationSeconds = dur;
+      this._livePlaying = Boolean(isPlaying);
+      this._liveTickAt = now;
+      return;
+    }
+
+    const pendingSeekActive =
+      sameTrack &&
+      this._pendingSeekTrackKey &&
+      this._pendingSeekTrackKey === trackKey &&
+      Date.now() < this._pendingSeekUntil;
+
+    if (pendingSeekActive) {
+      const expectedFloor = Math.max(0, this._pendingSeekPositionSeconds - 1.5);
+      if (pos < expectedFloor) {
+        this._liveDurationSeconds = dur;
+        this._livePlaying = Boolean(isPlaying);
+        if (!isPlaying || wasPlaying !== Boolean(isPlaying)) {
+          this._liveTickAt = now;
+        }
+        return;
+      }
+      this._pendingSeekUntil = 0;
+      this._pendingSeekTrackKey = "";
+      this._pendingSeekPositionSeconds = 0;
+    }
+
     if (!sameTrack) {
+      this._pendingSeekUntil = 0;
+      this._pendingSeekTrackKey = "";
+      this._pendingSeekPositionSeconds = 0;
       this._liveTrackKey = trackKey;
       this._livePositionSeconds = pos;
-    } else if (!isPlaying || Math.abs(pos - this._livePositionSeconds) > 2) {
+      acceptedPosition = true;
+    } else if (!isPlaying) {
+      acceptedPosition = Math.abs(pos - this._livePositionSeconds) > 0.1;
       this._livePositionSeconds = pos;
     } else if (pos > this._livePositionSeconds) {
+      acceptedPosition = true;
       this._livePositionSeconds = pos;
     }
 
     this._liveDurationSeconds = dur;
     this._livePlaying = Boolean(isPlaying);
-    this._liveTickAt = now;
+    if (acceptedPosition || wasPlaying !== this._livePlaying || this._liveTickAt <= 0) {
+      this._liveTickAt = now;
+    }
   }
 
   _xuLyNhipHenGioTienDo() {
-    if (!this._livePlaying) {
+    if (!this._livePlaying || this._draggingPlayback) {
       this._dongBoTienDoDom();
       return;
     }
 
-    const now = Date.now();
+    const now = performance.now();
     const elapsed = Math.max(0, (now - this._liveTickAt) / 1000);
     this._liveTickAt = now;
     if (elapsed <= 0) return;
@@ -1525,8 +2010,8 @@ class PhicommR1Card extends HTMLElement {
     const positionEl = root.getElementById("playback-position");
     const durationEl = root.getElementById("playback-duration");
     const progressEl = root.getElementById("playback-progress");
-    const progressTrackEl = root.getElementById("playback-progress-track");
     const progressThumbEl = root.getElementById("playback-progress-thumb");
+    const progressInputEl = root.getElementById("playback-progress-input");
 
     if (positionEl) {
       positionEl.textContent = this._dinhDangDongHo(this._livePositionSeconds, "0:00");
@@ -1546,9 +2031,9 @@ class PhicommR1Card extends HTMLElement {
       if (progressThumbEl) {
         progressThumbEl.style.left = `${progressPercent.toFixed(2)}%`;
       }
-      if (progressTrackEl) {
-        progressTrackEl.setAttribute("aria-valuenow", String(Math.round(this._livePositionSeconds)));
-        progressTrackEl.setAttribute("aria-valuemax", String(Math.max(0, Math.round(this._liveDurationSeconds))));
+      if (progressInputEl) {
+        progressInputEl.max = String(Math.max(0, Math.round(this._liveDurationSeconds)));
+        progressInputEl.value = String(Math.max(0, Math.round(this._livePositionSeconds)));
       }
     }
   }
@@ -1567,12 +2052,12 @@ class PhicommR1Card extends HTMLElement {
       attrs.playback_state_raw,
       stateObj?.state
     );
-    const aiboxPlaybackState = this._giaiMaTrangThaiPhat(
-      aibox.state,
-      aibox.play_state,
-      aibox.is_playing
-    );
-    const hasExplicitStop = aiboxPlaybackState === "idle" || entityPlaybackState === "idle";
+    const aiboxPlaybackState = this._giaiMaTrangThaiAibox(aibox);
+    const aiboxPlaying = aiboxPlaybackState === "playing";
+    const aiboxPaused = aiboxPlaybackState === "paused";
+    const anyPlaybackPlaying = aiboxPlaying || entityPlaybackState === "playing";
+    const hasExplicitStop =
+      !anyPlaybackPlaying && (aiboxPlaybackState === "idle" || entityPlaybackState === "idle");
     const candidateIds = Array.from(
       new Set(
         [
@@ -1600,29 +2085,29 @@ class PhicommR1Card extends HTMLElement {
 
     const rawTitle = this._chuoiKhongRongDauTien(
       aibox.title,
-      attrs.media_title,
       matchedItem?.title,
-      playFallback.title
+      playFallback.title,
+      attrs.media_title
     );
     let title = this._laTieuDeNghi(rawTitle) ? "" : rawTitle;
     let artist = this._chuoiKhongRongDauTien(
       aibox.artist,
       aibox.channel,
-      attrs.media_artist,
       matchedItem?.artist,
       matchedItem?.channel,
-      playFallback.artist
+      playFallback.artist,
+      attrs.media_artist
     );
     let duration = this._epKieuGiayPhat(
       aibox.duration ??
-        attrs.media_duration ??
         matchedItem?.duration_seconds ??
         playFallback.duration_seconds ??
-        playFallback.duration,
+        playFallback.duration ??
+        attrs.media_duration,
       0
     );
     let position = this._epKieuGiayPhat(
-      aibox.position ?? attrs.media_position ?? playFallback.position,
+      aibox.position ?? playFallback.position ?? attrs.media_position,
       0
     );
     if (duration > 0 && position > duration) {
@@ -1635,9 +2120,9 @@ class PhicommR1Card extends HTMLElement {
     );
     let thumbnailUrl = this._chuoiKhongRongDauTien(
       aibox.thumbnail_url,
-      attrs.entity_picture,
       matchedItem?.thumbnail_url,
-      playFallback.thumbnail_url
+      playFallback.thumbnail_url,
+      attrs.entity_picture
     );
     const aiboxTrackId = this._chuoiKhongRongDauTien(
       aibox.video_id,
@@ -1645,30 +2130,41 @@ class PhicommR1Card extends HTMLElement {
       aibox.id,
       aibox.track_id
     );
-    const playlistId = this._chuoiKhongRongDauTien(
+    let playlistId = this._chuoiKhongRongDauTien(
       aibox.playlist_id,
       playFallback.playlist_id,
       matchedItem?.playlist_id
     );
-    const trackId = this._chuoiKhongRongDauTien(
+    let trackId = this._chuoiKhongRongDauTien(
       aiboxTrackId,
       playFallback.video_id,
       playFallback.song_id,
       playFallback.id,
       this._layIdMucMedia(matchedItem)
     );
-    const aiboxPlaying = aiboxPlaybackState === "playing";
-    const aiboxPaused = aiboxPlaybackState === "paused";
-
-    const rawTrackKey = this._chuoiKhongRongDauTien(
+    let rawTrackKey = this._chuoiKhongRongDauTien(
       trackId ? `track:${trackId}` : "",
       playlistId && title ? `playlist:${playlistId}|${title}` : "",
       source && title ? `${source}|${title}|${artist}|${duration}` : ""
     );
+    if (this._nenBoQuaTinHieuChuyenBai(rawTrackKey, position) && this._nowPlayingCache.trackKey) {
+      const cached = this._nowPlayingCache;
+      title = cached.title;
+      artist = cached.artist;
+      source = cached.source;
+      thumbnailUrl = cached.thumbnail_url;
+      duration = cached.duration > 0 ? cached.duration : 0;
+      position = duration > 0
+        ? Math.min(this._livePositionSeconds, duration)
+        : this._livePositionSeconds;
+      trackId = cached.trackId;
+      playlistId = cached.playlistId;
+      rawTrackKey = cached.trackKey;
+    }
     const hardStopRaw =
       position <= 0 &&
       duration <= 0 &&
-      (hasExplicitStop ||
+      ((hasExplicitStop && !anyPlaybackPlaying) ||
         (!aiboxPlaybackState &&
           !entityPlaybackState &&
           !title &&
@@ -1757,34 +2253,35 @@ class PhicommR1Card extends HTMLElement {
   _layTrangThaiHienThiPhat(playback, stateObj = this._doiTuongTrangThai()) {
     const entityState = String(stateObj?.state || "idle").toLowerCase();
     const rawPlaybackState = String(stateObj?.attributes?.playback_state_raw || "").toLowerCase();
-    const aiboxState = this._giaiMaTrangThaiPhat(
-      playback.aibox?.state,
-      playback.aibox?.play_state,
-      playback.aibox?.is_playing
-    );
+    const aiboxState = this._giaiMaTrangThaiAibox(playback.aibox);
     const entityPlaybackState = this._giaiMaTrangThaiPhat(rawPlaybackState, entityState);
-    const forcedPaused = Date.now() < this._forcePauseUntil;
+    const now = Date.now();
+    const aiboxUpdatedAtMs = this._mocCapNhatPayload(playback.aibox || {});
+    const aiboxStateIsFresh = aiboxUpdatedAtMs > 0 && now - aiboxUpdatedAtMs <= 20000;
+    const freshAiboxStop = aiboxState === "idle" && aiboxStateIsFresh;
+    const freshAiboxPause = aiboxState === "paused" && aiboxStateIsFresh;
+    const forcedStopped = now < this._forceStopUntil;
+    const forcedPaused = now < this._forcePauseUntil;
     const optimisticPlaying =
-      Date.now() < this._optimisticPlayUntil &&
+      now < this._optimisticPlayUntil &&
       this._lastPlayPauseSent === "play" &&
       !forcedPaused &&
-      aiboxState !== "paused" &&
-      aiboxState !== "idle" &&
-      entityPlaybackState !== "paused" &&
-      entityPlaybackState !== "idle";
+      !forcedStopped;
 
     let currentState = "idle";
-    if (!forcedPaused && aiboxState === "playing") {
+    if (forcedStopped || freshAiboxStop) {
+      currentState = "idle";
+    } else if (forcedPaused || freshAiboxPause) {
+      currentState = "paused";
+    } else if (optimisticPlaying) {
+      currentState = "playing";
+    } else if (aiboxState === "playing" || entityPlaybackState === "playing") {
       currentState = "playing";
     } else if (aiboxState) {
       currentState = aiboxState;
-    } else if (!forcedPaused && entityPlaybackState === "playing") {
-      currentState = "playing";
     } else if (entityPlaybackState) {
       currentState = entityPlaybackState;
-    } else if (optimisticPlaying) {
-      currentState = "playing";
-    } else if (forcedPaused || this._lastPlayPauseSent === "pause") {
+    } else if (this._lastPlayPauseSent === "pause") {
       currentState = "paused";
     }
 
@@ -1800,6 +2297,60 @@ class PhicommR1Card extends HTMLElement {
       entityPaused: entityPlaybackState === "paused",
       entityIdle: entityPlaybackState === "idle",
     };
+  }
+
+  _apDungTrangThaiPhatCucBo(action, { rerender = false } = {}) {
+    const now = Date.now();
+    this._lastPlayPauseSent = action;
+    this._draggingPlayback = false;
+
+    if (action === "pause") {
+      this._forcePauseUntil = now + 5000;
+      this._forceStopUntil = 0;
+      this._optimisticPlayUntil = 0;
+      this._livePlaying = false;
+    } else if (action === "play") {
+      this._forcePauseUntil = 0;
+      this._forceStopUntil = 0;
+      this._optimisticPlayUntil = now + 5000;
+      if (
+        this._liveTrackKey &&
+        (this._liveDurationSeconds <= 0 || this._livePositionSeconds < this._liveDurationSeconds)
+      ) {
+        this._livePlaying = true;
+      }
+    }
+
+    this._liveTickAt = performance.now();
+    this._dongBoTienDoDom();
+    this._capNhatHenGioTienDo();
+    if (rerender) {
+      this._veGiaoDien();
+    }
+  }
+
+  _apDungTrangThaiDungCucBo({ rerender = false } = {}) {
+    const now = Date.now();
+    this._lastPlayPauseSent = "pause";
+    this._forcePauseUntil = now + 5000;
+    this._forceStopUntil = now + 5000;
+    this._optimisticPlayUntil = 0;
+    this._draggingPlayback = false;
+    this._pendingSeekUntil = 0;
+    this._pendingSeekTrackKey = "";
+    this._pendingSeekPositionSeconds = 0;
+    this._xoaCanhGacChuyenBai();
+    this._liveTrackKey = "";
+    this._livePositionSeconds = 0;
+    this._liveDurationSeconds = 0;
+    this._livePlaying = false;
+    this._liveTickAt = performance.now();
+    this._nowPlayingCache = this._taoNowPlayingCache();
+    this._dongBoTienDoDom();
+    this._capNhatHenGioTienDo();
+    if (rerender) {
+      this._veGiaoDien();
+    }
   }
 
   _veCotSong() {
@@ -1956,31 +2507,19 @@ class PhicommR1Card extends HTMLElement {
   }
 
   async _xuLyPhatMuc(item, source) {
-    const normalizedSource = String(source || item?.source || "").toLowerCase();
-    if (this._laMucPlaylist(item, normalizedSource)) {
-      const playlistId = this._chuoiKhongRongDauTien(
-        item?.playlist_id,
-        item?.playlistId,
-        item?.id
-      );
-      if (!playlistId) return;
-      await this._goiDichVu("media_player", "playlist_play", {
-        playlist_id: playlistId,
-      });
+    const candidate = this._taoUngVienPhatMuc(item, source);
+    if (!candidate?.playable) return;
+
+    this._apDungChuyenBaiCucBo(candidate, { rerender: true });
+    await this._goiDichVu("media_player", candidate.service, candidate.serviceData);
+    if (candidate.isPlaylist) {
       if (this._mediaSearchTab === "playlists") {
-        this._playlistDetailVisibleId = String(playlistId).trim();
+        this._playlistDetailVisibleId = String(candidate.playlistId).trim();
       }
-    } else if (normalizedSource.includes("zing")) {
-      const songId = this._chuoiKhongRongDauTien(item?.song_id, item?.songId, item?.id);
-      if (!songId) return;
-      await this._goiDichVu("media_player", "play_zing", { song_id: songId });
-    } else {
-      const videoId = this._chuoiKhongRongDauTien(item?.video_id, item?.videoId, item?.id);
-      if (!videoId) return;
-      await this._goiDichVu("media_player", "play_youtube", { video_id: videoId });
     }
     this._lastPlayPauseSent = "play";
     this._forcePauseUntil = 0;
+    this._forceStopUntil = 0;
     this._optimisticPlayUntil = Date.now() + 5000;
     await this._lamMoiEntity(300, 2);
   }
@@ -1990,29 +2529,36 @@ class PhicommR1Card extends HTMLElement {
     const playback = this._thongTinPhat();
     const playbackState = this._layTrangThaiHienThiPhat(playback, stateObj);
     const nextAction = playbackState.isPlaying ? "pause" : "play";
+    const previousState = {
+      lastPlayPauseSent: this._lastPlayPauseSent,
+      forcePauseUntil: this._forcePauseUntil,
+      forceStopUntil: this._forceStopUntil,
+      optimisticPlayUntil: this._optimisticPlayUntil,
+      livePlaying: this._livePlaying,
+      liveTickAt: this._liveTickAt,
+      draggingPlayback: this._draggingPlayback,
+    };
 
-    await this._goiDichVu(
-      "media_player",
-      nextAction === "pause" ? "media_pause" : "media_play"
-    );
-    this._lastPlayPauseSent = nextAction;
-    if (nextAction === "pause") {
-      this._forcePauseUntil = Date.now() + 5000;
-      this._optimisticPlayUntil = 0;
-      this._livePlaying = false;
+    this._apDungTrangThaiPhatCucBo(nextAction, { rerender: true });
+    try {
+      await this._goiDichVu(
+        "media_player",
+        nextAction === "pause" ? "media_pause" : "media_play"
+      );
+      await this._lamMoiEntity(300);
+    } catch (err) {
+      this._lastPlayPauseSent = previousState.lastPlayPauseSent;
+      this._forcePauseUntil = previousState.forcePauseUntil;
+      this._forceStopUntil = previousState.forceStopUntil;
+      this._optimisticPlayUntil = previousState.optimisticPlayUntil;
+      this._livePlaying = previousState.livePlaying;
+      this._liveTickAt = previousState.liveTickAt;
+      this._draggingPlayback = previousState.draggingPlayback;
       this._dongBoTienDoDom();
       this._capNhatHenGioTienDo();
-    } else {
-      this._forcePauseUntil = 0;
-      this._optimisticPlayUntil = Date.now() + 5000;
-      if (this._liveDurationSeconds > 0 && this._livePositionSeconds < this._liveDurationSeconds) {
-        this._livePlaying = true;
-        this._liveTickAt = Date.now();
-        this._dongBoTienDoDom();
-        this._capNhatHenGioTienDo();
-      }
+      this._veGiaoDien();
+      throw err;
     }
-    await this._lamMoiEntity(300);
   }
 
   async _apDungEqMau(name) {
@@ -2213,10 +2759,16 @@ class PhicommR1Card extends HTMLElement {
     const searchItems = Array.isArray(searchData.items) ? searchData.items : [];
     const listSource = searchData.source || playback.search?.source || playback.play?.source || "youtube";
     const isPlaylistManagerTab = this._mediaSearchTab === "playlists";
-    const positionSeconds = this._epKieuGiayPhat(playback.position, 0);
-    const durationSeconds = this._epKieuGiayPhat(playback.duration, 0);
+    const isStopped = currentState === "idle";
+    const positionSeconds = isStopped ? 0 : this._epKieuGiayPhat(playback.position, 0);
+    const durationSeconds = isStopped ? 0 : this._epKieuGiayPhat(playback.duration, 0);
 
-    this._dongBoTienDoTrucTiep(playback.track_key || "", positionSeconds, durationSeconds, isPlaying);
+    this._dongBoTienDoTrucTiep(
+      isStopped ? "" : playback.track_key || "",
+      positionSeconds,
+      durationSeconds,
+      isPlaying
+    );
     const livePositionSeconds = this._livePositionSeconds;
     const liveDurationSeconds = this._liveDurationSeconds > 0 ? this._liveDurationSeconds : durationSeconds;
 
@@ -2227,6 +2779,9 @@ class PhicommR1Card extends HTMLElement {
     const positionLabel = this._dinhDangDongHo(livePositionSeconds, "0:00");
     const durationLabel = liveDurationSeconds > 0 ? this._dinhDangThoiLuong(liveDurationSeconds) : "--:--";
     const coverUrl = this._maHoaHtml(playback.thumbnail_url || "");
+    const discSpinStyle = isPlaying
+      ? ` style="animation-delay:-${Math.floor(Date.now() % 7200)}ms;"`
+      : "";
     const waveBars = this._veCotSong();
 
     return `
@@ -2244,8 +2799,10 @@ class PhicommR1Card extends HTMLElement {
           </div>
 
           <div class="player-stage">
-            <div class="cover-disc ${isPlaying ? "spinning" : ""}">
-              ${coverUrl ? `<img src="${coverUrl}" alt="" />` : `<ha-icon icon="mdi:music-note"></ha-icon>`}
+            <div class="cover-disc">
+              <div class="cover-disc-rotor ${isPlaying ? "spinning" : ""}"${discSpinStyle}>
+                ${coverUrl ? `<img src="${coverUrl}" alt="" />` : `<ha-icon icon="mdi:music-note"></ha-icon>`}
+              </div>
             </div>
             <div class="wave-area">
               <div class="waveform">
@@ -2267,14 +2824,19 @@ class PhicommR1Card extends HTMLElement {
           <div
             id="playback-progress-track"
             class="progress-track"
-            role="slider"
-            aria-label="Thanh tua phát nhạc"
-            aria-valuemin="0"
-            aria-valuemax="${Math.max(0, Math.round(liveDurationSeconds))}"
-            aria-valuenow="${Math.max(0, Math.round(livePositionSeconds))}"
           >
             <div id="playback-progress" class="progress-fill" style="width:${progressPercent.toFixed(2)}%"></div>
             <span id="playback-progress-thumb" class="progress-thumb" style="left:${progressPercent.toFixed(2)}%"></span>
+            <input
+              id="playback-progress-input"
+              class="progress-range"
+              type="range"
+              min="0"
+              max="${Math.max(0, Math.round(liveDurationSeconds))}"
+              step="1"
+              value="${Math.max(0, Math.round(livePositionSeconds))}"
+              aria-label="Thanh tua phát nhạc"
+            />
           </div>
 
           <div class="meta-row">
@@ -2293,7 +2855,18 @@ class PhicommR1Card extends HTMLElement {
 
         ${isPlaylistManagerTab ? this._veThuVienPlaylist() : `
           <div class="search-row">
-            <input id="media-query" class="text-input" type="text" placeholder="${this._maHoaHtml(this._placeholderTimKiemMedia())}" value="${this._maHoaHtml(this._query)}" />
+            <input
+              id="media-query"
+              class="text-input"
+              type="text"
+              placeholder="${this._maHoaHtml(this._placeholderTimKiemMedia())}"
+              value="${this._maHoaHtml(this._query)}"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              enterkeyhint="search"
+            />
             <button id="btn-search" class="icon-btn icon-btn-primary" title="Tìm kiếm"><ha-icon icon="mdi:magnify"></ha-icon></button>
           </div>
         `}
@@ -2648,9 +3221,9 @@ class PhicommR1Card extends HTMLElement {
                   <span class="slider"></span>
                 </label>
               </div>
-              <div class="label-line"><span>Độ sáng</span><strong>${this._mainLightBrightness}</strong></div>
+              <div class="label-line"><span>Độ sáng</span><strong id="main-light-brightness-value">${this._mainLightBrightness}</strong></div>
               <input id="main-light-brightness" type="range" min="1" max="200" step="1" value="${this._mainLightBrightness}" />
-              <div class="label-line"><span>Tốc độ</span><strong>${this._mainLightSpeed}</strong></div>
+              <div class="label-line"><span>Tốc độ</span><strong id="main-light-speed-value">${this._mainLightSpeed}</strong></div>
               <input id="main-light-speed" type="range" min="1" max="100" step="1" value="${this._mainLightSpeed}" />
               <div class="actions-inline modes">
                 ${lightModes
@@ -2671,7 +3244,7 @@ class PhicommR1Card extends HTMLElement {
                   <span class="slider"></span>
                 </label>
               </div>
-              <div class="label-line"><span>Cường độ</span><strong>${this._edgeLightIntensity}</strong></div>
+              <div class="label-line"><span>Cường độ</span><strong id="edge-light-intensity-value">${this._edgeLightIntensity}</strong></div>
               <input id="edge-light-intensity" type="range" min="0" max="100" step="1" value="${this._edgeLightIntensity}" />
             </div>
           `}
@@ -2720,6 +3293,7 @@ class PhicommR1Card extends HTMLElement {
     const cardShellStyle = maxHeightCss
       ? ` style="--card-max-height:${this._maHoaHtml(maxHeightCss)};"`
       : "";
+    const scrollSnapshot = this._taoSnapshotViTriCuon();
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -2867,8 +3441,8 @@ class PhicommR1Card extends HTMLElement {
           width: 100%;
           height: 100%;
           object-fit: cover;
-          filter: saturate(1.05) brightness(0.33) blur(1px);
-          transform: scale(1.03);
+          filter: saturate(1.16) brightness(0.58) blur(0.4px);
+          transform: scale(1.02);
           pointer-events: none;
         }
 
@@ -2876,8 +3450,8 @@ class PhicommR1Card extends HTMLElement {
           position: absolute;
           inset: 0;
           background:
-            linear-gradient(180deg, rgba(8, 20, 48, 0.44) 0%, rgba(7, 19, 46, 0.82) 64%, rgba(6, 18, 43, 0.94) 100%),
-            radial-gradient(500px 180px at 18% 100%, rgba(116, 77, 255, 0.2), transparent 72%);
+            linear-gradient(180deg, rgba(8, 20, 48, 0.24) 0%, rgba(7, 19, 46, 0.56) 64%, rgba(6, 18, 43, 0.76) 100%),
+            radial-gradient(500px 180px at 18% 100%, rgba(116, 77, 255, 0.16), transparent 72%);
           pointer-events: none;
         }
 
@@ -2949,30 +3523,46 @@ class PhicommR1Card extends HTMLElement {
           width: 92px;
           height: 92px;
           border-radius: 50%;
-          overflow: hidden;
           border: 3px solid rgba(118, 159, 255, 0.5);
           box-shadow: 0 8px 26px rgba(11, 18, 38, 0.45);
+          background: rgba(9, 18, 40, 0.42);
+          position: relative;
+          display: grid;
+          place-items: center;
+          contain: paint;
+        }
+
+        .cover-disc-rotor {
+          width: 100%;
+          height: 100%;
+          border-radius: 50%;
+          overflow: hidden;
           display: flex;
           align-items: center;
           justify-content: center;
           background: radial-gradient(circle at 30% 25%, rgba(100, 105, 245, 0.46), rgba(13, 24, 52, 0.95));
           will-change: transform;
+          transform: translateZ(0);
+          transform-origin: center center;
+          backface-visibility: hidden;
         }
 
-        .cover-disc img {
+        .cover-disc-rotor img {
           width: 100%;
           height: 100%;
           object-fit: cover;
           border-radius: 50%;
+          display: block;
         }
 
-        .cover-disc ha-icon {
+        .cover-disc-rotor ha-icon {
           color: #d8e4ff;
           --mdc-icon-size: 34px;
+          transform: translateZ(0);
         }
 
-        .hero.is-playing .cover-disc.spinning {
-          animation: discSpin 8s linear infinite;
+        .hero.is-playing .cover-disc-rotor.spinning {
+          animation: discSpin 7.2s linear infinite;
         }
 
         .hero.is-playing .cover-disc {
@@ -2986,8 +3576,8 @@ class PhicommR1Card extends HTMLElement {
           min-height: 116px;
           border-radius: 12px;
           overflow: hidden;
-          background: linear-gradient(180deg, rgba(27, 46, 86, 0.38), rgba(15, 31, 68, 0.22));
-          border: 1px solid rgba(101, 125, 255, 0.22);
+          background: linear-gradient(180deg, rgba(27, 46, 86, 0.2), rgba(15, 31, 68, 0.1));
+          border: 1px solid rgba(119, 142, 255, 0.3);
         }
 
         .waveform {
@@ -3069,11 +3659,12 @@ class PhicommR1Card extends HTMLElement {
           border-radius: 999px;
           background: rgba(117, 136, 170, 0.45);
           overflow: visible;
-          cursor: pointer;
           position: relative;
         }
 
         .progress-fill {
+          position: absolute;
+          inset: 0 auto 0 0;
           height: 100%;
           border-radius: 999px;
           background: linear-gradient(90deg, #764dff 0%, #8b5cf6 52%, #637bff 100%);
@@ -3095,8 +3686,49 @@ class PhicommR1Card extends HTMLElement {
           pointer-events: none;
         }
 
-        .progress-track:hover .progress-thumb {
+        .progress-track:hover .progress-thumb,
+        .progress-track:focus-within .progress-thumb {
           opacity: 1;
+        }
+
+        .progress-range {
+          position: absolute;
+          inset: -7px 0;
+          width: 100%;
+          margin: 0;
+          opacity: 0;
+          cursor: pointer;
+          background: transparent;
+          -webkit-appearance: none;
+          appearance: none;
+        }
+
+        .progress-range::-webkit-slider-runnable-track {
+          height: 24px;
+          background: transparent;
+          border: 0;
+        }
+
+        .progress-range::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 24px;
+          height: 24px;
+          background: transparent;
+          border: 0;
+        }
+
+        .progress-range::-moz-range-track {
+          height: 24px;
+          background: transparent;
+          border: 0;
+        }
+
+        .progress-range::-moz-range-thumb {
+          width: 24px;
+          height: 24px;
+          background: transparent;
+          border: 0;
+          border-radius: 999px;
         }
 
         @media (hover: none) {
@@ -3119,8 +3751,8 @@ class PhicommR1Card extends HTMLElement {
         }
 
         @keyframes discSpin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
+          from { transform: translateZ(0) rotate(0deg); }
+          to { transform: translateZ(0) rotate(360deg); }
         }
 
         .subtabs {
@@ -4907,8 +5539,10 @@ class PhicommR1Card extends HTMLElement {
     }
 
     this._ganSuKien();
+    this._lamSachChoFocusInputVanBanSauRender();
     this._dongBoTienDoDom();
     this._capNhatHenGioTienDo();
+    this._phucHoiViTriCuon(scrollSnapshot);
   }
 
   async _damBaoTrangThaiChat() {
@@ -4987,6 +5621,43 @@ class PhicommR1Card extends HTMLElement {
     const root = this.shadowRoot;
     if (!root) return;
 
+    const ganSuKienInputVanBan = (input, options = {}) => {
+      if (!this._laInputVanBanCoTheChinhSua(input) || !input.id) return;
+      const id = input.id;
+      const batDauFocus = () => {
+        this._batDauChoFocusInputVanBan(id);
+      };
+      input.addEventListener("pointerdown", batDauFocus);
+      input.addEventListener("mousedown", batDauFocus);
+      input.addEventListener("focus", (ev) => {
+        this._xacNhanFocusInputVanBan(id);
+        options.onFocus?.(ev);
+      });
+      input.addEventListener("blur", (ev) => {
+        options.onBlur?.(ev);
+        this._xoaChoFocusInputVanBan(id);
+        setTimeout(() => {
+          this._xoaChoFocusInputVanBan(id);
+          this._xuLyRenderCho();
+        }, 0);
+      });
+    };
+
+    const ganSuKienScroll = (element) => {
+      if (!element) return;
+      element.addEventListener(
+        "scroll",
+        () => {
+          this._batDauCanhGacScroll();
+        },
+        { passive: true }
+      );
+    };
+
+    ganSuKienScroll(root.querySelector(".card-body"));
+    ganSuKienScroll(root.querySelector(".panel-media .results"));
+    ganSuKienScroll(root.querySelector(".chat-shell-history"));
+
     root.querySelectorAll("[data-tab]").forEach((el) => {
       el.addEventListener("click", () => {
         this._activeTab = el.dataset.tab || "media";
@@ -5015,8 +5686,13 @@ class PhicommR1Card extends HTMLElement {
 
     const mediaQuery = root.getElementById("media-query");
     if (mediaQuery) {
-      mediaQuery.addEventListener("focus", () => {
-        this._mediaQueryFocused = true;
+      ganSuKienInputVanBan(mediaQuery, {
+        onFocus: () => {
+          this._mediaQueryFocused = true;
+        },
+        onBlur: () => {
+          this._mediaQueryFocused = false;
+        },
       });
       mediaQuery.addEventListener("input", (ev) => {
         this._query = ev.target.value;
@@ -5042,14 +5718,6 @@ class PhicommR1Card extends HTMLElement {
         this._query = mediaQuery.value;
         await this._xuLyTimKiem(mediaQuery.value);
       });
-      mediaQuery.addEventListener("blur", () => {
-        this._mediaQueryFocused = false;
-        // Defer pending-render flush so click on adjacent buttons
-        // (especially Search) is not swallowed by an immediate re-render.
-        setTimeout(() => {
-          this._xuLyRenderCho();
-        }, 0);
-      });
     }
 
     const btnSearch = root.getElementById("btn-search");
@@ -5064,37 +5732,47 @@ class PhicommR1Card extends HTMLElement {
       });
     }
 
-    const progressTrack = root.getElementById("playback-progress-track");
-    if (progressTrack) {
-      const seekToClientX = async (clientX) => {
+    const progressInput = root.getElementById("playback-progress-input");
+    if (progressInput) {
+      const capNhatSeekTam = (target) => {
         const duration = this._liveDurationSeconds > 0
           ? this._liveDurationSeconds
           : this._epKieuGiayPhat(this._thongTinPhat().duration, 0);
-        if (duration <= 0) return;
-        const rect = progressTrack.getBoundingClientRect();
-        if (!rect.width) return;
-        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        const target = Math.floor(duration * ratio);
-        this._livePositionSeconds = target;
+        if (duration <= 0) return 0;
+        const normalizedTarget = Math.max(0, Math.min(duration, Number(target) || 0));
+        this._draggingPlayback = true;
+        this._livePositionSeconds = normalizedTarget;
         this._liveDurationSeconds = duration;
-        this._liveTickAt = Date.now();
+        this._liveTickAt = performance.now();
         this._dongBoTienDoDom();
-        await this._goiDichVu("media_player", "seek", { position: target });
+        return normalizedTarget;
+      };
+      const commitSeek = async (target) => {
+        const normalizedTarget = capNhatSeekTam(target);
+        if (normalizedTarget <= 0 && this._liveDurationSeconds <= 0) {
+          this._draggingPlayback = false;
+          return;
+        }
+        this._pendingSeekTrackKey = this._liveTrackKey;
+        this._pendingSeekPositionSeconds = normalizedTarget;
+        this._pendingSeekUntil = Date.now() + 2500;
+        this._xoaCanhGacChuyenBai();
+        this._draggingPlayback = false;
+        this._liveTickAt = performance.now();
+        this._dongBoTienDoDom();
+        await this._goiDichVu("media_player", "seek", { position: Math.floor(normalizedTarget) });
         await this._lamMoiEntity(180);
       };
-      progressTrack.addEventListener("click", async (ev) => {
-        await seekToClientX(ev.clientX);
+
+      progressInput.addEventListener("input", (ev) => {
+        capNhatSeekTam(ev.target.value);
       });
-      progressTrack.addEventListener(
-        "touchend",
-        async (ev) => {
-          const touch = ev.changedTouches?.[0];
-          if (!touch) return;
-          ev.preventDefault();
-          await seekToClientX(touch.clientX);
-        },
-        { passive: false }
-      );
+      progressInput.addEventListener("change", async (ev) => {
+        await commitSeek(ev.target.value);
+      });
+      progressInput.addEventListener("pointerdown", () => {
+        this._draggingPlayback = true;
+      });
     }
 
     const btnPrev = root.getElementById("btn-prev");
@@ -5114,17 +5792,8 @@ class PhicommR1Card extends HTMLElement {
     const btnStop = root.getElementById("btn-stop");
     if (btnStop) {
       btnStop.addEventListener("click", async () => {
-        this._forcePauseUntil = Date.now() + 5000;
-        this._optimisticPlayUntil = 0;
-        this._liveTrackKey = "";
-        this._livePositionSeconds = 0;
-        this._liveDurationSeconds = 0;
-        this._livePlaying = false;
-        this._nowPlayingCache = this._taoNowPlayingCache();
-        this._dongBoTienDoDom();
-        this._capNhatHenGioTienDo();
+        this._apDungTrangThaiDungCucBo({ rerender: true });
         await this._goiDichVu("media_player", "media_stop");
-        this._lastPlayPauseSent = "pause";
         await this._lamMoiEntity(300);
       });
     }
@@ -5318,6 +5987,7 @@ class PhicommR1Card extends HTMLElement {
 
     const playlistNewName = root.getElementById("playlist-new-name");
     if (playlistNewName) {
+      ganSuKienInputVanBan(playlistNewName);
       playlistNewName.addEventListener("input", (ev) => {
         this._playlistDialog = {
           ...this._playlistDialog,
@@ -5456,6 +6126,7 @@ class PhicommR1Card extends HTMLElement {
 
     const chatInput = root.getElementById("chat-input");
     if (chatInput) {
+      ganSuKienInputVanBan(chatInput);
       chatInput.addEventListener("compositionstart", () => {
         this._chatDangCompose = true;
       });
@@ -5472,11 +6143,6 @@ class PhicommR1Card extends HTMLElement {
           ev.preventDefault();
           await this._guiTinNhanChat();
         }
-      });
-      chatInput.addEventListener("blur", () => {
-        setTimeout(() => {
-          this._xuLyRenderCho();
-        }, 0);
       });
     }
 
@@ -5637,47 +6303,83 @@ class PhicommR1Card extends HTMLElement {
     if (mainLightEnabled) {
       mainLightEnabled.addEventListener("change", async (ev) => {
         const desired = Boolean(ev.target.checked);
+        const previousEnabled = this._mainLightEnabled;
         this._mainLightEnabled = desired;
         this._datCongTacCho("main_light_enabled", desired);
         try {
           await this._goiDichVu("phicomm_r1", "set_main_light", {
             enabled: desired,
           });
+          if (desired) {
+            this._mainLightMode = 3;
+            this._datDieuKhienCho("main_light_mode", 3);
+            this._veGiaoDien();
+            try {
+              await this._goiDichVu("phicomm_r1", "set_light_mode", { mode: 3 });
+            } catch (modeErr) {
+              console.warn("set_light_mode(3) after enabling main light failed", modeErr);
+              this._xoaDieuKhienCho("main_light_mode");
+              await this._lamMoiEntity(250, 2);
+              return;
+            }
+          }
           await this._lamMoiEntity(250, 2);
         } catch (err) {
           console.warn("set_main_light failed", err);
           this._xoaCongTacCho("main_light_enabled");
-          this._mainLightEnabled = !desired;
+          this._mainLightEnabled = previousEnabled;
           ev.target.checked = this._mainLightEnabled;
         }
       });
     }
 
     const mainBrightness = root.getElementById("main-light-brightness");
+    const mainBrightnessValue = root.getElementById("main-light-brightness-value");
     if (mainBrightness) {
       mainBrightness.addEventListener("input", (ev) => {
         this._mainLightBrightness = Number(ev.target.value);
+        if (mainBrightnessValue) {
+          mainBrightnessValue.textContent = `${this._mainLightBrightness}`;
+        }
       });
       mainBrightness.addEventListener("change", async (ev) => {
         this._mainLightBrightness = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_light_brightness", {
-          brightness: this._mainLightBrightness,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._datDieuKhienCho("main_light_brightness", this._mainLightBrightness);
+        try {
+          await this._goiDichVu("phicomm_r1", "set_light_brightness", {
+            brightness: this._mainLightBrightness,
+          });
+          await this._lamMoiEntity(250, 2);
+        } catch (err) {
+          console.warn("set_light_brightness failed", err);
+          this._xoaDieuKhienCho("main_light_brightness");
+          await this._lamMoiEntity(250, 2);
+        }
       });
     }
 
     const mainSpeed = root.getElementById("main-light-speed");
+    const mainSpeedValue = root.getElementById("main-light-speed-value");
     if (mainSpeed) {
       mainSpeed.addEventListener("input", (ev) => {
         this._mainLightSpeed = Number(ev.target.value);
+        if (mainSpeedValue) {
+          mainSpeedValue.textContent = `${this._mainLightSpeed}`;
+        }
       });
       mainSpeed.addEventListener("change", async (ev) => {
         this._mainLightSpeed = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_light_speed", {
-          speed: this._mainLightSpeed,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._datDieuKhienCho("main_light_speed", this._mainLightSpeed);
+        try {
+          await this._goiDichVu("phicomm_r1", "set_light_speed", {
+            speed: this._mainLightSpeed,
+          });
+          await this._lamMoiEntity(250, 2);
+        } catch (err) {
+          console.warn("set_light_speed failed", err);
+          this._xoaDieuKhienCho("main_light_speed");
+          await this._lamMoiEntity(250, 2);
+        }
       });
     }
 
@@ -5685,35 +6387,87 @@ class PhicommR1Card extends HTMLElement {
       el.addEventListener("click", async () => {
         const mode = Number(el.dataset.mode || "0");
         this._mainLightMode = mode;
-        await this._goiDichVu("phicomm_r1", "set_light_mode", { mode });
-        await this._lamMoiEntity(250, 2);
+        this._datDieuKhienCho("main_light_mode", mode);
+        this._veGiaoDien();
+        try {
+          await this._goiDichVu("phicomm_r1", "set_light_mode", { mode });
+          await this._lamMoiEntity(250, 2);
+        } catch (err) {
+          console.warn("set_light_mode failed", err);
+          this._xoaDieuKhienCho("main_light_mode");
+          await this._lamMoiEntity(250, 2);
+        }
       });
     });
 
     const edgeEnabled = root.getElementById("edge-light-enabled");
     if (edgeEnabled) {
       edgeEnabled.addEventListener("change", async (ev) => {
-        this._edgeLightEnabled = Boolean(ev.target.checked);
-        await this._goiDichVu("phicomm_r1", "set_edge_light", {
-          enabled: this._edgeLightEnabled,
-          intensity: this._edgeLightIntensity,
-        });
-        await this._lamMoiEntity(250, 2);
+        const desired = Boolean(ev.target.checked);
+        const previousEnabled = this._edgeLightEnabled;
+        const previousIntensity = this._edgeLightIntensity;
+        this._edgeLightEnabled = desired;
+        this._datDieuKhienCho("edge_light_enabled", desired);
+        if (desired) {
+          this._datDieuKhienCho("edge_light_intensity", this._edgeLightIntensity, Number.POSITIVE_INFINITY);
+        }
+        try {
+          await this._goiDichVu("phicomm_r1", "set_edge_light", desired
+            ? {
+                enabled: true,
+                intensity: this._edgeLightIntensity,
+              }
+            : {
+                enabled: false,
+              });
+          await this._lamMoiEntity(250, 2);
+        } catch (err) {
+          console.warn("set_edge_light toggle failed", err);
+          this._xoaDieuKhienCho("edge_light_enabled");
+          this._edgeLightEnabled = previousEnabled;
+          this._edgeLightIntensity = previousIntensity;
+          if (!previousEnabled) {
+            this._datDieuKhienCho(
+              "edge_light_intensity",
+              previousIntensity,
+              Number.POSITIVE_INFINITY
+            );
+          }
+          ev.target.checked = this._edgeLightEnabled;
+        }
       });
     }
 
     const edgeIntensity = root.getElementById("edge-light-intensity");
+    const edgeIntensityValue = root.getElementById("edge-light-intensity-value");
     if (edgeIntensity) {
       edgeIntensity.addEventListener("input", (ev) => {
         this._edgeLightIntensity = Number(ev.target.value);
+        if (edgeIntensityValue) {
+          edgeIntensityValue.textContent = `${this._edgeLightIntensity}`;
+        }
       });
       edgeIntensity.addEventListener("change", async (ev) => {
         this._edgeLightIntensity = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_edge_light", {
-          enabled: this._edgeLightEnabled,
-          intensity: this._edgeLightIntensity,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._datDieuKhienCho(
+          "edge_light_intensity",
+          this._edgeLightIntensity,
+          Number.POSITIVE_INFINITY
+        );
+        if (!this._edgeLightEnabled) {
+          return;
+        }
+        try {
+          await this._goiDichVu("phicomm_r1", "set_edge_light", {
+            enabled: true,
+            intensity: this._edgeLightIntensity,
+          });
+          await this._lamMoiEntity(250, 2);
+        } catch (err) {
+          console.warn("set_edge_light intensity failed", err);
+          this._xoaDieuKhienCho("edge_light_intensity");
+          await this._lamMoiEntity(250, 2);
+        }
       });
     }
 
@@ -5726,15 +6480,51 @@ class PhicommR1Card extends HTMLElement {
   }
 }
 
+const PHICOMM_R1_CONSOLE_BANNER_FLAG = "__trung_dung_phicomm_r1_card_console_banner__";
+
+function logPhicommR1ConsoleBanner() {
+  if (window[PHICOMM_R1_CONSOLE_BANNER_FLAG]) return;
+  window[PHICOMM_R1_CONSOLE_BANNER_FLAG] = true;
+
+  const bannerStyle = [
+    "background: linear-gradient(135deg, #061329 0%, #123b8b 45%, #6c4bff 100%)",
+    "color: #f8fbff",
+    "font-weight: 800",
+    "font-size: 14px",
+    "line-height: 1.6",
+    "padding: 10px 16px",
+    "border-radius: 12px",
+    "border: 2px solid rgba(122, 99, 255, 0.85)",
+    "text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25)",
+  ].join("; ");
+  const accentStyle = [
+    "background: #07142f",
+    "color: #8ec5ff",
+    "font-weight: 700",
+    "font-size: 12px",
+    "padding: 8px 12px",
+    "border-radius: 12px",
+    "border: 1px solid rgba(142, 197, 255, 0.45)",
+  ].join("; ");
+
+  console.info(
+    "%c [R1] Trung Dũng - Phicomm R1 Card %c Custom Lovelace Card Loaded ",
+    bannerStyle,
+    accentStyle
+  );
+}
+
 if (!customElements.get("phicomm-r1-card")) {
   customElements.define("phicomm-r1-card", PhicommR1Card);
 }
+
+logPhicommR1ConsoleBanner();
 
 window.customCards = window.customCards || [];
 if (!window.customCards.find((card) => card.type === "phicomm-r1-card")) {
   window.customCards.push({
     type: "phicomm-r1-card",
-    name: "Phicomm R1 Card",
+    name: "Trung Dũng - Phicomm R1 Card",
     description: "Tabbed dashboard card for Phicomm R1 integration",
     preview: true,
   });

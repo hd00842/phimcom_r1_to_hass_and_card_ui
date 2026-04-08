@@ -204,6 +204,11 @@ class PhicommR1ApiClient:
         self._protocol = protocol
         self._timeout = timeout
         self._last_aibox_playback: dict[str, Any] = {}
+        self._aibox_playback_callbacks: list[Callable[[dict[str, Any]], Awaitable[None] | None]] = []
+        self._aibox_live_listener_task: asyncio.Task[None] | None = None
+        self._aibox_refresh_burst_task: asyncio.Task[None] | None = None
+        self._aibox_live_listener_stop = asyncio.Event()
+        self._aibox_last_live_event_monotonic = 0.0
 
     @property
     def protocol(self) -> str:
@@ -371,6 +376,33 @@ class PhicommR1ApiClient:
             if parsed_enabled is not None:
                 normalized["enabled"] = parsed_enabled
 
+        for source_key, target_key in (
+            ("isPlaying", "is_playing"),
+            ("playing", "is_playing"),
+            ("playState", "play_state"),
+            ("playStatus", "play_state"),
+            ("play_status", "play_state"),
+            ("playerState", "state"),
+            ("player_state", "state"),
+            ("playbackState", "state"),
+            ("playback_state", "state"),
+            ("videoId", "video_id"),
+            ("songId", "song_id"),
+            ("playlistId", "playlist_id"),
+            ("trackId", "track_id"),
+            ("thumbnailUrl", "thumbnail_url"),
+            ("updatedAtMs", "updated_at_ms"),
+        ):
+            if target_key not in normalized and source_key in normalized:
+                normalized[target_key] = normalized[source_key]
+
+        if "state" not in normalized and "status" in normalized:
+            status_value = normalized.get("status")
+            parsed_status = PhicommR1ApiClient._aibox_phan_tich_co_dang_phat(status_value)
+            status_text = str(status_value or "").strip().lower()
+            if parsed_status is not None or status_text in {"idle", "stopped", "stop"}:
+                normalized["state"] = status_value
+
         msg_kind = PhicommR1ApiClient._aibox_loai_tin_nhan(normalized)
         if msg_kind and "type" not in normalized:
             normalized["type"] = msg_kind
@@ -434,13 +466,14 @@ class PhicommR1ApiClient:
         self,
         payload: dict[str, Any],
         msg_kind: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Capture latest playback metadata broadcast by AiboxPlus."""
         kind = (msg_kind or self._aibox_loai_tin_nhan(payload) or "").strip().lower()
         if not payload:
-            return
+            return False
 
         is_playback_payload = kind in {
+            "play_started",
             "playback_state",
             "music_state",
             "player_state",
@@ -449,8 +482,18 @@ class PhicommR1ApiClient:
             key in payload
             for key in (
                 "is_playing",
+                "playing",
+                "isPlaying",
                 "play_state",
+                "playState",
+                "playStatus",
+                "play_status",
                 "state",
+                "playerState",
+                "player_state",
+                "playbackState",
+                "playback_state",
+                "status",
                 "title",
                 "artist",
                 "channel",
@@ -460,13 +503,18 @@ class PhicommR1ApiClient:
                 "source",
                 "id",
                 "video_id",
+                "videoId",
                 "song_id",
+                "songId",
+                "track_id",
+                "trackId",
                 "playlist_id",
+                "playlistId",
                 "url",
             )
         )
         if not is_playback_payload:
-            return
+            return False
 
         merged = dict(self._last_aibox_playback)
         previous_title = str(merged.get("title", "") or "").strip()
@@ -474,6 +522,11 @@ class PhicommR1ApiClient:
             merged.get("video_id")
             or merged.get("song_id")
             or merged.get("playlist_id")
+            or merged.get("track_id")
+            or merged.get("videoId")
+            or merged.get("songId")
+            or merged.get("playlistId")
+            or merged.get("trackId")
             or merged.get("id")
             or ""
         ).strip()
@@ -482,13 +535,31 @@ class PhicommR1ApiClient:
             payload.get("video_id")
             or payload.get("song_id")
             or payload.get("playlist_id")
+            or payload.get("track_id")
+            or payload.get("videoId")
+            or payload.get("songId")
+            or payload.get("playlistId")
+            or payload.get("trackId")
             or payload.get("id")
             or ""
         ).strip()
         title_changed = bool(incoming_title and previous_title and incoming_title != previous_title)
         identity_changed = bool(incoming_identity and previous_identity and incoming_identity != previous_identity)
         if title_changed or identity_changed:
-            for key in ("id", "video_id", "song_id", "url"):
+            for key in (
+                "title",
+                "artist",
+                "channel",
+                "thumbnail_url",
+                "duration",
+                "position",
+                "id",
+                "video_id",
+                "song_id",
+                "track_id",
+                "playlist_id",
+                "url",
+            ):
                 merged.pop(key, None)
 
         for key in (
@@ -505,7 +576,9 @@ class PhicommR1ApiClient:
             "id",
             "video_id",
             "song_id",
+            "track_id",
             "playlist_id",
+            "status",
             "url",
             "auto_next_enabled",
             "repeat_enabled",
@@ -517,20 +590,9 @@ class PhicommR1ApiClient:
         # Keep `is_playing` in sync with the freshest state-like signal.
         # Many firmware frames only include `state`/`play_state`, and if we
         # don't normalize them here the old `is_playing` value can become stale.
-        playing_hint: bool | None = None
-        for key in ("is_playing", "play_state", "state"):
-            if key in payload:
-                parsed = self._aibox_phan_tich_co_dang_phat(payload.get(key))
-                if parsed is not None:
-                    playing_hint = parsed
-                    break
+        playing_hint = self._aibox_lay_goi_y_dang_phat(payload)
         if playing_hint is None:
-            for key in ("is_playing", "play_state", "state"):
-                if key in merged:
-                    parsed = self._aibox_phan_tich_co_dang_phat(merged.get(key))
-                    if parsed is not None:
-                        playing_hint = parsed
-                        break
+            playing_hint = self._aibox_lay_goi_y_dang_phat(merged)
         if playing_hint is not None:
             merged["is_playing"] = playing_hint
 
@@ -566,6 +628,7 @@ class PhicommR1ApiClient:
                 "id",
                 "video_id",
                 "song_id",
+                "track_id",
                 "playlist_id",
                 "url",
             ):
@@ -574,6 +637,8 @@ class PhicommR1ApiClient:
         merged["type"] = kind or payload.get("type") or "playback_state"
         merged["updated_at_ms"] = int(time.time() * 1000)
         self._last_aibox_playback = merged
+        self._aibox_phat_cap_nhat_playback()
+        return True
 
     @staticmethod
     def _aibox_phan_tich_co_dang_phat(value: Any) -> bool | None:
@@ -590,9 +655,198 @@ class PhicommR1ApiClient:
                 return False
         return None
 
+    @classmethod
+    def _aibox_lay_goi_y_dang_phat(cls, payload: dict[str, Any]) -> bool | None:
+        """Read playback truth from explicit fields before generic state text."""
+        if not isinstance(payload, dict):
+            return None
+        for key in (
+            "is_playing",
+            "playing",
+            "isPlaying",
+            "play_state",
+            "playState",
+            "playStatus",
+            "play_status",
+            "playerState",
+            "player_state",
+            "playbackState",
+            "playback_state",
+            "state",
+            "status",
+        ):
+            if key not in payload:
+                continue
+            parsed = cls._aibox_phan_tich_co_dang_phat(payload.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+
     def get_last_aibox_playback(self) -> dict[str, Any]:
         """Return latest observed Aibox playback metadata."""
         return dict(self._last_aibox_playback)
+
+    def dang_ky_callback_playback_aibox(
+        self,
+        callback: Callable[[dict[str, Any]], Awaitable[None] | None],
+    ) -> None:
+        """Register a callback for immediate playback pushes."""
+        if callback in self._aibox_playback_callbacks:
+            return
+        self._aibox_playback_callbacks.append(callback)
+
+    def huy_callback_playback_aibox(
+        self,
+        callback: Callable[[dict[str, Any]], Awaitable[None] | None],
+    ) -> None:
+        """Remove a previously registered playback callback."""
+        with suppress(ValueError):
+            self._aibox_playback_callbacks.remove(callback)
+
+    def _aibox_phat_cap_nhat_playback(self) -> None:
+        """Push the freshest Aibox playback cache to all listeners."""
+        if not self._aibox_playback_callbacks or not self._last_aibox_playback:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        snapshot = dict(self._last_aibox_playback)
+        for callback in tuple(self._aibox_playback_callbacks):
+            loop.create_task(
+                self._aibox_chay_callback_playback(callback, dict(snapshot))
+            )
+
+    async def _aibox_chay_callback_playback(
+        self,
+        callback: Callable[[dict[str, Any]], Awaitable[None] | None],
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Run one playback callback safely."""
+        try:
+            maybe_awaitable = callback(snapshot)
+            if asyncio.iscoroutine(maybe_awaitable):
+                await maybe_awaitable
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Aibox playback callback failed")
+
+    async def async_bat_dau_lang_nghe_playback_aibox(self) -> None:
+        """Ensure persistent Aibox playback listener is running."""
+        task = self._aibox_live_listener_task
+        if task is not None and not task.done():
+            return
+        self._aibox_live_listener_stop.clear()
+        self._aibox_live_listener_task = asyncio.create_task(
+            self._aibox_vong_lang_nghe_playback(),
+            name="phicomm_r1_aibox_playback_listener",
+        )
+
+    async def async_dung_lang_nghe_playback_aibox(self) -> None:
+        """Stop background playback listener and follow-up refreshes."""
+        self._aibox_live_listener_stop.set()
+        tasks = [self._aibox_refresh_burst_task, self._aibox_live_listener_task]
+        self._aibox_refresh_burst_task = None
+        self._aibox_live_listener_task = None
+
+        for task in tasks:
+            if task is None:
+                continue
+            task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+
+    def _aibox_lenh_refresh_burst(self) -> None:
+        """Poll playback briefly after optimistic commands until live WS catches up."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        task = self._aibox_refresh_burst_task
+        if task is not None and not task.done():
+            task.cancel()
+
+        baseline_live_mark = self._aibox_last_live_event_monotonic
+        self._aibox_refresh_burst_task = loop.create_task(
+            self._aibox_refresh_burst_playback(baseline_live_mark),
+            name="phicomm_r1_aibox_playback_burst",
+        )
+
+    async def _aibox_refresh_burst_playback(self, baseline_live_mark: float) -> None:
+        """Issue a short playback refresh burst while waiting for firmware frames."""
+        try:
+            for delay in (0.6, 0.9, 1.5):
+                await asyncio.sleep(delay)
+                if self._aibox_live_listener_stop.is_set():
+                    return
+                if self._aibox_last_live_event_monotonic > baseline_live_mark:
+                    return
+                with suppress(PhicommR1ApiError, Exception):
+                    payload = await self.async_aibox_get_playback_state()
+                    if payload:
+                        return
+        except asyncio.CancelledError:
+            raise
+
+    async def _aibox_vong_lang_nghe_playback(self) -> None:
+        """Keep a persistent AiboxPlus socket open for live playback updates."""
+        retry_delay = 1.0
+        while not self._aibox_live_listener_stop.is_set():
+            try:
+                async with self._session.ws_connect(
+                    self._aibox_ws_url,
+                    timeout=self._timeout,
+                    heartbeat=20.0,
+                ) as ws:
+                    retry_delay = 1.0
+                    while not self._aibox_live_listener_stop.is_set():
+                        try:
+                            msg = await ws.receive(timeout=55.0)
+                        except asyncio.TimeoutError:
+                            await ws.ping()
+                            continue
+
+                        if msg.type is WSMsgType.TEXT:
+                            try:
+                                data = json.loads(msg.data)
+                            except json.JSONDecodeError:
+                                continue
+                            if not isinstance(data, dict):
+                                continue
+                            normalized = self._aibox_chuan_hoa_payload(data)
+                            msg_kind = self._aibox_loai_tin_nhan(normalized)
+                            if self._aibox_loai_khop(msg_kind, "connected"):
+                                continue
+                            if self._aibox_loai_khop(msg_kind, "play_started"):
+                                normalized.setdefault("is_playing", True)
+                                normalized.setdefault("play_state", 1)
+                                normalized.setdefault("state", "playing")
+                                normalized.setdefault("position", 0)
+                            updated = self._aibox_cap_nhat_bo_nho_phat(normalized, msg_kind)
+                            if updated:
+                                self._aibox_last_live_event_monotonic = (
+                                    asyncio.get_running_loop().time()
+                                )
+                            continue
+
+                        if msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
+                            raise PhicommR1ApiConnectionError(
+                                "AiboxPlus live playback listener closed unexpectedly"
+                            )
+            except asyncio.CancelledError:
+                raise
+            except (ClientError, PhicommR1ApiConnectionError) as err:
+                if not self._aibox_live_listener_stop.is_set():
+                    _LOGGER.debug("Aibox live playback listener reconnecting after error: %s", err)
+            except Exception as err:  # noqa: BLE001
+                if not self._aibox_live_listener_stop.is_set():
+                    _LOGGER.debug("Aibox live playback listener unexpected error: %s", err)
+
+            if self._aibox_live_listener_stop.is_set():
+                break
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 10.0)
 
     @staticmethod
     def _aibox_la_payload_tin_nhan_chat(payload: dict[str, Any]) -> bool:
@@ -1131,13 +1385,7 @@ class PhicommR1ApiClient:
         if self._protocol == PROTOCOL_WS_NATIVE:
             info = await self._ws_lay_thong_tin()
             state_text = str(info.get("state") or "").strip().lower()
-            playing_hint: bool | None = None
-            for key in ("is_playing", "play_state", "state"):
-                if key in info:
-                    parsed = self._aibox_phan_tich_co_dang_phat(info.get(key))
-                    if parsed is not None:
-                        playing_hint = parsed
-                        break
+            playing_hint = self._aibox_lay_goi_y_dang_phat(info)
             if playing_hint is True:
                 return "playing"
             if playing_hint is False:
@@ -1177,13 +1425,7 @@ class PhicommR1ApiClient:
                 max_vol = 100
 
             state_text = str(info.get("state") or "").strip().lower()
-            playing_hint: bool | None = None
-            for key in ("is_playing", "play_state", "state"):
-                if key in info:
-                    parsed = self._aibox_phan_tich_co_dang_phat(info.get(key))
-                    if parsed is not None:
-                        playing_hint = parsed
-                        break
+            playing_hint = self._aibox_lay_goi_y_dang_phat(info)
 
             if playing_hint is True:
                 playback_state = "playing"
@@ -1530,10 +1772,13 @@ class PhicommR1ApiClient:
                 "state": "playing",
                 "position": 0,
                 "source": "youtube",
+                "id": normalized_video_id,
+                "video_id": normalized_video_id,
                 "type": "playback_state",
             },
             "playback_state",
         )
+        self._aibox_lenh_refresh_burst()
 
     async def async_play_zing(self, song_id: str) -> None:
         """Play Zing MP3 song by song id via AiboxPlus WS API."""
@@ -1546,10 +1791,13 @@ class PhicommR1ApiClient:
                 "state": "playing",
                 "position": 0,
                 "source": "zingmp3",
+                "id": normalized_song_id,
+                "song_id": normalized_song_id,
                 "type": "playback_state",
             },
             "playback_state",
         )
+        self._aibox_lenh_refresh_burst()
 
     async def async_playlist_list(self) -> dict[str, Any]:
         """Fetch playlist library from AiboxPlus."""
@@ -1730,6 +1978,7 @@ class PhicommR1ApiClient:
         if playlist_name:
             optimistic["title"] = playlist_name
         self._aibox_cap_nhat_bo_nho_phat(optimistic, "playback_state")
+        self._aibox_lenh_refresh_burst()
         return response
 
     async def async_aibox_media_action(self, action: str) -> None:
@@ -1783,6 +2032,7 @@ class PhicommR1ApiClient:
                     {"is_playing": False, "play_state": 0, "state": "stopped", "type": "playback_state"},
                     "playback_state",
                 )
+            self._aibox_lenh_refresh_burst()
             return
 
         if last_err is not None:
@@ -2006,10 +2256,13 @@ class PhicommR1ApiClient:
 
     async def async_aibox_seek(self, position: int) -> None:
         """Seek to position (seconds) in current AiboxPlus playback."""
-        await self._aibox_chi_gui({"action": "seek", "position": int(position)})
-        # Optimistically update position in cache
-        if self._last_aibox_playback:
-            self._last_aibox_playback["position"] = int(position)
+        target_position = int(position)
+        await self._aibox_chi_gui({"action": "seek", "position": target_position})
+        optimistic = dict(self._last_aibox_playback)
+        optimistic["position"] = target_position
+        optimistic.setdefault("type", "playback_state")
+        self._aibox_cap_nhat_bo_nho_phat(optimistic, "playback_state")
+        self._aibox_lenh_refresh_burst()
 
     async def async_aibox_toggle_repeat(self) -> dict[str, Any]:
         """Toggle repeat mode on AiboxPlus."""

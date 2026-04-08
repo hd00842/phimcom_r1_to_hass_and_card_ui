@@ -554,6 +554,9 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
     def state(self) -> MediaPlayerState:
         """Return playback state."""
         status = self.coordinator.data
+        aibox_playing = self._client._aibox_lay_goi_y_dang_phat(self._aibox_playback_snapshot())
+        if aibox_playing is True:
+            return MediaPlayerState.PLAYING
         if status.playback_state == "playing":
             return MediaPlayerState.PLAYING
         if status.playback_state == "paused":
@@ -704,8 +707,31 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
     def _aibox_playback_snapshot(self) -> dict[str, Any]:
         """Return the latest normalized Aibox playback payload."""
         status = self.coordinator.data
-        playback = status.aibox_playback if status.aibox_playback else self._client.get_last_aibox_playback()
-        return dict(playback) if isinstance(playback, dict) else {}
+        coordinator_playback = (
+            dict(status.aibox_playback) if isinstance(status.aibox_playback, dict) else {}
+        )
+        client_playback = self._client.get_last_aibox_playback()
+        if not isinstance(client_playback, dict):
+            client_playback = {}
+        if not coordinator_playback:
+            return dict(client_playback)
+        if not client_playback:
+            return dict(coordinator_playback)
+
+        coordinator_updated_at = self._moc_cap_nhat_payload_ms(coordinator_playback)
+        client_updated_at = self._moc_cap_nhat_payload_ms(client_playback)
+        return dict(client_playback if client_updated_at > coordinator_updated_at else coordinator_playback)
+
+    @staticmethod
+    def _moc_cap_nhat_payload_ms(payload: dict[str, Any]) -> int:
+        """Return best-effort payload update timestamp in milliseconds."""
+        for key in ("updated_at_ms", "updatedAtMs", "updated_at", "updatedAt"):
+            value = payload.get(key)
+            if value in (None, ""):
+                continue
+            with suppress(TypeError, ValueError):
+                return int(float(value))
+        return 0
 
     @staticmethod
     def _ep_kieu_giay_phat(value: Any) -> int | None:
@@ -754,6 +780,8 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         artist: str = "",
         thumbnail_url: str = "",
         duration_seconds: Any = None,
+        position: Any = None,
+        is_playing: Any = True,
     ) -> dict[str, Any]:
         """Build a short-lived playback fallback payload for the frontend."""
         payload: dict[str, Any] = {
@@ -776,7 +804,128 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         duration_value = self._ep_kieu_giay_phat(duration_seconds)
         if duration_value is not None:
             payload["duration_seconds"] = duration_value
+            payload["duration"] = duration_value
+        position_value = self._ep_kieu_giay_phat(position)
+        if position_value is not None:
+            payload["position"] = position_value
+        playing_value = self._client._aibox_phan_tich_co_dang_phat(is_playing)
+        if playing_value is None:
+            playing_value = bool(is_playing)
+        payload["is_playing"] = playing_value
         return payload
+
+    def _cap_nhat_last_play_tu_playback(
+        self,
+        *,
+        fallback: dict[str, Any] | None = None,
+    ) -> None:
+        """Keep `last_music_play` aligned with the freshest playback snapshot."""
+        playback = self._aibox_playback_snapshot()
+        merged = dict(self._last_play)
+        if fallback:
+            for key, value in fallback.items():
+                if value not in (None, ""):
+                    merged[key] = value
+
+        for key in (
+            "source",
+            "id",
+            "video_id",
+            "song_id",
+            "track_id",
+            "playlist_id",
+            "title",
+            "artist",
+            "channel",
+            "thumbnail_url",
+            "duration",
+            "position",
+            "updated_at_ms",
+            "is_playing",
+        ):
+            value = playback.get(key)
+            if value not in (None, ""):
+                merged[key] = value
+
+        duration_value = self._ep_kieu_giay_phat(
+            playback.get("duration", merged.get("duration_seconds", merged.get("duration")))
+        )
+        if duration_value is not None:
+            merged["duration_seconds"] = duration_value
+            merged["duration"] = duration_value
+
+        position_value = self._ep_kieu_giay_phat(playback.get("position", merged.get("position")))
+        if position_value is not None:
+            merged["position"] = position_value
+
+        artist_value = self._chu_dau_tien(playback, ("artist", "channel"))
+        if artist_value:
+            merged["artist"] = artist_value
+
+        if "updated_at_ms" not in merged:
+            merged["updated_at_ms"] = int(time.time() * 1000)
+
+        playing_value = self._client._aibox_lay_goi_y_dang_phat(playback)
+        if playing_value is None and "is_playing" in merged:
+            playing_value = self._client._aibox_phan_tich_co_dang_phat(merged.get("is_playing"))
+        if playing_value is not None:
+            merged["is_playing"] = playing_value
+
+        if fallback and self._moc_cap_nhat_payload_ms(fallback) >= self._moc_cap_nhat_payload_ms(playback):
+            for key in (
+                "source",
+                "id",
+                "video_id",
+                "song_id",
+                "track_id",
+                "playlist_id",
+                "title",
+                "artist",
+                "channel",
+                "thumbnail_url",
+                "duration",
+                "duration_seconds",
+                "position",
+                "is_playing",
+                "state",
+                "play_state",
+                "updated_at_ms",
+            ):
+                value = fallback.get(key)
+                if value not in (None, ""):
+                    merged[key] = value
+            duration_value = self._ep_kieu_giay_phat(
+                merged.get("duration_seconds", merged.get("duration"))
+            )
+            if duration_value is not None:
+                merged["duration_seconds"] = duration_value
+                merged["duration"] = duration_value
+
+        self._last_play = merged
+
+    def _cap_nhat_last_play_sau_hanh_dong_media(self, action: str) -> None:
+        """Apply a small optimistic fallback for play/pause/stop/seek controls."""
+        fallback: dict[str, Any] = {
+            "updated_at_ms": int(time.time() * 1000),
+        }
+        if action == "play":
+            fallback["is_playing"] = True
+            fallback["play_state"] = 1
+            fallback["state"] = "playing"
+        elif action == "pause":
+            fallback["is_playing"] = False
+            fallback["play_state"] = 0
+            fallback["state"] = "paused"
+        elif action == "stop":
+            fallback["is_playing"] = False
+            fallback["play_state"] = 0
+            fallback["state"] = "stopped"
+            fallback["position"] = 0
+        self._cap_nhat_last_play_tu_playback(fallback=fallback)
+
+    def _len_lich_lam_moi_media(self) -> None:
+        """Refresh coordinator shortly after optimistic media state without blocking UI."""
+        self.hass.async_create_task(self.coordinator.async_request_refresh())
 
     def _tao_playlist_item_rut_gon(self, playlist: dict[str, Any]) -> dict[str, Any]:
         """Compress one playlist entry for entity attributes."""
@@ -1216,9 +1365,12 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             artist=self._chu_dau_tien(matched_item, ("artist",)) or "",
             thumbnail_url=self._chu_dau_tien(matched_item, ("thumbnail_url",)) or "",
             duration_seconds=matched_item.get("duration_seconds"),
+            position=0,
+            is_playing=True,
         )
         self._last_play_pause_sent = "play"
-        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+        self._len_lich_lam_moi_media()
 
     async def async_play_zing(self, song_id: str) -> None:
         """Entity service: play Zing MP3 song by song id."""
@@ -1233,9 +1385,12 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             artist=self._chu_dau_tien(matched_item, ("artist",)) or "",
             thumbnail_url=self._chu_dau_tien(matched_item, ("thumbnail_url",)) or "",
             duration_seconds=matched_item.get("duration_seconds"),
+            position=0,
+            is_playing=True,
         )
         self._last_play_pause_sent = "play"
-        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+        self._len_lich_lam_moi_media()
 
     async def _lam_moi_playlist_library(self) -> None:
         """Refresh cached playlist library from device."""
@@ -1351,9 +1506,12 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             item_id=normalized_playlist_id,
             playlist_id=normalized_playlist_id,
             title=playlist_name,
+            position=0,
+            is_playing=True,
         )
         self._last_play_pause_sent = "play"
-        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+        self._len_lich_lam_moi_media()
         await self._lam_moi_playlist_detail(normalized_playlist_id)
         self.async_write_ha_state()
 
@@ -1641,7 +1799,14 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
     async def async_seek(self, position: int) -> None:
         """Entity service: seek to position in seconds."""
         await self._client.async_aibox_seek(position)
+        self._cap_nhat_last_play_tu_playback(
+            fallback={
+                "position": int(position),
+                "updated_at_ms": int(time.time() * 1000),
+            }
+        )
         self.async_write_ha_state()
+        self._len_lich_lam_moi_media()
 
     async def async_toggle_repeat(self) -> None:
         """Entity service: toggle repeat mode."""
@@ -1837,12 +2002,15 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             if prefer_aibox:
                 try:
                     await self._client.async_aibox_media_action("toggle")
-                    await self.coordinator.async_request_refresh()
+                    desired_action = "play" if self._last_play_pause_sent == "pause" else "pause"
+                    self._cap_nhat_last_play_sau_hanh_dong_media(desired_action)
+                    self.async_write_ha_state()
+                    self._len_lich_lam_moi_media()
                     return
                 except PhicommR1ApiError:
                     _LOGGER.debug("Aibox toggle failed, fallback to keyevent play/pause")
             await self._client.async_send_keycode(KEYCODE_MEDIA_PLAY_PAUSE)
-            await self.coordinator.async_request_refresh()
+            self._len_lich_lam_moi_media()
             return
 
         if self._is_ws_native:
@@ -1853,7 +2021,12 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
                     if action == "stop":
                         with suppress(PhicommR1ApiError):
                             await self._client.async_send_keycode(KEYCODE_MEDIA_STOP)
-                    await self.coordinator.async_request_refresh()
+                    if action in {"play", "pause", "stop"}:
+                        self._cap_nhat_last_play_sau_hanh_dong_media(action)
+                        self.async_write_ha_state()
+                        self._len_lich_lam_moi_media()
+                    else:
+                        await self.coordinator.async_request_refresh()
                     return
                 except PhicommR1ApiError:
                     _LOGGER.debug("Aibox media action failed in ws_native, fallback to native path")
@@ -1864,31 +2037,60 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
                 await self._client.async_media_dispatch(action)
             except PhicommR1ApiError:
                 await self._client.async_send_keycode(MEDIA_ACTION_TO_KEYCODE[action])
-            await self.coordinator.async_request_refresh()
+            if action in {"play", "pause", "stop"}:
+                self._cap_nhat_last_play_sau_hanh_dong_media(action)
+                self.async_write_ha_state()
+                self._len_lich_lam_moi_media()
+            else:
+                await self.coordinator.async_request_refresh()
             return
 
         # Bridge mode: YouTube/Zing playback is controlled by AiboxPlus (port 8082).
         # Try Aibox first, then fallback to legacy bridge controls.
+        optimistic_written = False
         try:
             await self._client.async_aibox_media_action(action)
+            if action in {"play", "pause", "stop"}:
+                self._cap_nhat_last_play_sau_hanh_dong_media(action)
+                self.async_write_ha_state()
+                optimistic_written = True
         except PhicommR1ApiError:
             if self._use_media_dispatch:
                 await self._client.async_media_dispatch(action)
             else:
                 await self._client.async_send_keycode(MEDIA_ACTION_TO_KEYCODE[action])
+            if action in {"play", "pause", "stop"}:
+                self._cap_nhat_last_play_sau_hanh_dong_media(action)
+                self.async_write_ha_state()
+                optimistic_written = True
 
         # Reinforce stop in bridge mode because some Aibox builds accept
         # `stop` action without actually halting playback.
         if action == "stop":
             with suppress(PhicommR1ApiError):
                 await self._client.async_send_keycode(KEYCODE_MEDIA_STOP)
-        await self.coordinator.async_request_refresh()
+        if optimistic_written or action in {"play", "pause", "stop"}:
+            self._len_lich_lam_moi_media()
+        else:
+            await self.coordinator.async_request_refresh()
 
     def _uu_tien_dieu_khien_media_aibox(self) -> bool:
         """Return true when current playback likely comes from Aibox (YouTube/Zing)."""
-        source = str(self._last_play.get("source", "")).strip().lower()
-        if source in {"youtube", "youtube_playlist", "zingmp3"}:
-            return True
-        last_search = self._last_search or {}
-        search_source = str(last_search.get("source", "")).strip().lower()
-        return search_source in {"youtube", "youtube_playlist", "zingmp3"}
+        aibox_sources = {"youtube", "youtube_playlist", "zingmp3"}
+
+        for payload in (self._aibox_playback_snapshot(), self._last_play, self._last_search):
+            if not isinstance(payload, dict):
+                continue
+            source = (
+                str(payload.get("source", "")).strip().lower().replace("-", "_").replace(" ", "_")
+            )
+            if source in aibox_sources:
+                return True
+
+        aibox_playback = self._aibox_playback_snapshot()
+        title = str(aibox_playback.get("title", "") or "").strip()
+        has_aibox_identity = any(
+            str(aibox_playback.get(key, "") or "").strip()
+            for key in ("video_id", "song_id", "playlist_id", "id", "track_id")
+        )
+        return bool(title and has_aibox_identity)

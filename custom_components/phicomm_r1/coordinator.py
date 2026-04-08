@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 import logging
 from typing import Any
@@ -107,6 +107,43 @@ class PhicommR1Coordinator(DataUpdateCoordinator[PhicommR1Status]):
         )
         self.client = client
         self._use_media_dispatch = use_media_dispatch
+        self.client.dang_ky_callback_playback_aibox(self._async_xu_ly_cap_nhat_playback_aibox)
+        hass.async_create_task(self.client.async_bat_dau_lang_nghe_playback_aibox())
+
+    async def async_shutdown(self) -> None:
+        """Detach live listeners owned by this coordinator."""
+        self.client.huy_callback_playback_aibox(self._async_xu_ly_cap_nhat_playback_aibox)
+
+    async def _async_xu_ly_cap_nhat_playback_aibox(self, playback: dict[str, Any]) -> None:
+        """Push live/optimistic Aibox playback updates into Home Assistant immediately."""
+        if not isinstance(playback, dict) or not playback:
+            return
+
+        current = self.data if isinstance(self.data, PhicommR1Status) else PhicommR1Status()
+        next_raw = dict(current.raw or {})
+        next_playback = dict(playback)
+        resolved_playback_state = current.playback_state
+
+        aibox_playing = self.client._aibox_lay_goi_y_dang_phat(next_playback)
+        if aibox_playing is True:
+            resolved_playback_state = "playing"
+        elif aibox_playing is False:
+            normalized_state = str(
+                next_playback.get("state", next_playback.get("play_state", ""))
+            ).strip().lower()
+            resolved_playback_state = "idle" if normalized_state in {"idle", "stopped", "stop"} else "paused"
+
+        if resolved_playback_state is not None:
+            next_raw["playback_state"] = resolved_playback_state
+
+        self.async_set_updated_data(
+            replace(
+                current,
+                playback_state=resolved_playback_state,
+                raw=next_raw,
+                aibox_playback=next_playback,
+            )
+        )
 
     async def _async_update_data(self) -> PhicommR1Status:
         """Fetch state from device."""
@@ -145,9 +182,7 @@ class PhicommR1Coordinator(DataUpdateCoordinator[PhicommR1Status]):
             if aibox_pb:
                 status.aibox_playback = aibox_pb
                 # Override playback_state from aibox if it has a valid signal
-                aibox_playing = self.client._aibox_phan_tich_co_dang_phat(
-                    aibox_pb.get("is_playing", aibox_pb.get("play_state", aibox_pb.get("state")))
-                )
+                aibox_playing = self.client._aibox_lay_goi_y_dang_phat(aibox_pb)
                 if aibox_playing is True:
                     status.playback_state = "playing"
                     status.raw["playback_state"] = "playing"
@@ -239,5 +274,22 @@ class PhicommR1Coordinator(DataUpdateCoordinator[PhicommR1Status]):
             led_resp = await self.client.async_led_get_state()
             if led_resp:
                 status.led_state = led_resp
+
+        latest_aibox_playback = self.client.get_last_aibox_playback()
+        current_updated_at = int(status.aibox_playback.get("updated_at_ms") or 0) if status.aibox_playback else 0
+        latest_updated_at = int(latest_aibox_playback.get("updated_at_ms") or 0) if latest_aibox_playback else 0
+        if latest_updated_at > current_updated_at:
+            status.aibox_playback = latest_aibox_playback
+            latest_playing = self.client._aibox_lay_goi_y_dang_phat(latest_aibox_playback)
+            if latest_playing is True:
+                status.playback_state = "playing"
+                status.raw["playback_state"] = "playing"
+            elif latest_playing is False and status.playback_state != "playing":
+                latest_state = str(
+                    latest_aibox_playback.get("state", latest_aibox_playback.get("play_state", ""))
+                ).strip().lower()
+                resolved_state = "idle" if latest_state in {"idle", "stopped", "stop"} else "paused"
+                status.playback_state = resolved_state
+                status.raw["playback_state"] = resolved_state
 
         return status
