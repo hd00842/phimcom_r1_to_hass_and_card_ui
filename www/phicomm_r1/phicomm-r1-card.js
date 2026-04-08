@@ -2909,8 +2909,8 @@ class PhicommR1Card extends HTMLElement {
                   <div class="result-artist">${this._maHoaHtml(itemArtist)}</div>
                   <div class="result-duration">${this._maHoaHtml(metaValue)}</div>
                 </div>
-                <div class="result-actions">
-                  ${canAdd ? `
+                ${canAdd ? `
+                  <div class="result-actions">
                     <button
                       class="mini-btn mini-btn-accent add-btn"
                       type="button"
@@ -2919,16 +2919,8 @@ class PhicommR1Card extends HTMLElement {
                     >
                       <ha-icon icon="mdi:plus"></ha-icon>
                     </button>
-                  ` : ""}
-                  <button
-                    class="mini-btn mini-btn-danger play-btn"
-                    type="button"
-                    data-search-index="${idx}"
-                  >
-                    <ha-icon icon="mdi:play"></ha-icon>
-                    <span>Phát</span>
-                  </button>
-                </div>
+                  </div>
+                ` : ""}
               </div>
             `;
             }).join("")}
@@ -4237,11 +4229,6 @@ class PhicommR1Card extends HTMLElement {
           align-items: center;
           justify-content: center;
           gap: 6px;
-        }
-
-        .result-actions .play-btn {
-          font-size: 11px;
-          font-weight: 800;
         }
 
         .actions-inline {
@@ -5825,18 +5812,6 @@ class PhicommR1Card extends HTMLElement {
       return layKetQuaTimKiemHienTai()[index] || null;
     };
 
-    root.querySelectorAll(".play-btn").forEach((el) => {
-      el.addEventListener("click", async (ev) => {
-        ev.stopPropagation();
-        const item = layMucTimKiemTuElement(el);
-        if (!item) return;
-        await this._xuLyPhatMuc(
-          item,
-          item.source || this._nguonKetQuaTheoTab(this._mediaSearchTab)
-        );
-      });
-    });
-
     root.querySelectorAll(".add-btn").forEach((el) => {
       el.addEventListener("click", async (ev) => {
         ev.stopPropagation();
@@ -5851,7 +5826,7 @@ class PhicommR1Card extends HTMLElement {
 
     root.querySelectorAll(".result-item.playable").forEach((el) => {
       el.addEventListener("click", async (ev) => {
-        if (ev.target && (ev.target.closest(".play-btn") || ev.target.closest(".add-btn"))) return;
+        if (ev.target && ev.target.closest(".add-btn")) return;
         const item = layMucTimKiemTuElement(el);
         if (!item) return;
         await this._xuLyPhatMuc(
